@@ -1,0 +1,12 @@
+name: sf_python
+channels:
+  - defaults
+dependencies:
+  - python=3.10.12
+  - pandas=1.5.3
+  - numpy=1.23.5
+  - scipy=1.11.3
+  - pip=22.3.1
+  - pip:
+    - plotly==5.15.0
+    - kaleido==0.2.1

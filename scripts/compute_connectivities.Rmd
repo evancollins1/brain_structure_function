@@ -1,0 +1,195 @@
+---
+title: "Compute functional connectivity and structural connectivity of Yale Brain Atlas parcels"
+author: "Evan Collins"
+output: html_document
+date: '2023-08-11'
+---
+
+All code in this markdown document has written by Evan Collins. Any questions can be sent to evantomcollins@gmail.com.
+
+```{r}
+# Load data
+# Yale Brain Atlas parcel dictionary
+parcel_dict <- read.csv("../data/misc/parcel_dict.csv")
+# Load Neurosynth activation values in Yale Brain Atlas space
+# average z scores for 334 functional terms across 690 parcel
+neurosynth_functional_activation_df <- read.csv("../data/neurosynth/neurosynth_functional_activation_database.csv")
+
+# Yale Brain Atlas data
+atlas_whole_positions <- read.csv("../data/atlas/atlas_whole_positions.csv")
+```
+
+
+```{r}
+# Initialize fc_sc_df dataframe
+# This will be used to store all pairwise connectivity data
+# We will omit the pairwise comparison for the same parcel, e.g., Parcels i & i
+i_data <- c()
+j_data <- c()
+for (i in 1:690){
+  # Remove 690 rows where i = j in i,j dimensions (this is because our WM has zeros where i = j, not valid)
+  i_data <- append(i_data, rep(rep(i, i-1)))
+  j_data <- append(j_data, rep(c(1:690)[1:i-1]))
+}
+
+fc_sc_df <- data.frame("Parcel_A_ID" = i_data, 
+                       "Parcel_B_ID" = j_data, 
+                       "FC_Neurosynth" = NA,
+                       "FC_rsfMRI" = NA,
+                       "SC_WM_paths" = NA,
+                       "SC_WM_length" = NA,
+                       "SC_Eucl_dist" = NA)
+
+fc_sc_df$Parcel_A_name <- NA
+fc_sc_df$Parcel_B_name <- NA
+for (i in 1:nrow(fc_sc_df)){
+  fc_sc_df$Parcel_A_name[i] <- unique(atlas_whole_positions$parcel)[fc_sc_df$Parcel_A_ID[i]]
+  fc_sc_df$Parcel_B_name[i] <- unique(atlas_whole_positions$parcel)[fc_sc_df$Parcel_B_ID[i]]
+}
+fc_sc_df <- fc_sc_df[,c(1:2, 8:9, 3:7)]
+```
+
+```{r}
+# Functional connectivity (FC) - Neurosynth
+# computed by cosine similarity between parcels for Neurosynth activation data
+fc_matrix <- cosine(t(as.matrix(neurosynth_functional_activation_df))) #690 x 690
+
+# Add to connectivity dataframe
+fc_df <- as.data.frame(fc_matrix)
+names(fc_df) <- parcel_dict$Name
+# Save average rsfMRI matrix
+write.csv(fc_df, "../data/connectivity/functional_connectivity_neurosynth.csv", row.names = F)
+for (i in 1:nrow(fc_sc_df)){
+  fc_sc_df$FC_Neurosynth[i] <- fc_df[fc_sc_df$Parcel_A_ID[i], fc_sc_df$Parcel_B_ID[i]]
+}
+```
+
+```{r}
+# Functional connectivity (FC) - resting-state fMRI
+rsfmri_file_names <- list.files("../data/rsfmri")
+rsfmri_matrix_list <- list()
+
+for (i in 1:length(rsfmri_file_names)){
+  rsfmri_matrix_list[[i]] <- as.matrix(read.csv(paste0("../data/rsfmri/", rsfmri_file_names[i])))
+}
+
+rsfmri_matrix_all <- simplify2array(rsfmri_matrix_list)
+
+rsfmri_avg_matrix <- apply(rsfmri_matrix_all, c(1,2), mean)
+# Add to connectivity dataframe
+rsfmri_avg_df <- as.data.frame(rsfmri_avg_matrix)
+names(rsfmri_avg_df) <- parcel_dict$Name
+write.csv(rsfmri_avg_df, "../data/connectivity/functional_connectivity_rsfmri.csv", row.names = F)
+for (i in 1:nrow(fc_sc_df)){
+  fc_sc_df$FC_rsfMRI[i] <- rsfmri_avg_df[fc_sc_df$Parcel_A_ID[i], fc_sc_df$Parcel_B_ID[i]]
+} 
+```
+
+```{r}
+# Structural connectivity (SC) - white matter # of paths (HCP)
+# First unzip, /data/tractography folder
+wm_all_file_names <- list.files("../data/tractography")
+wmpaths_file_names <- wm_all_file_names[grepl("_WMPaths", wm_all_file_names)]
+
+# Load in WM # paths data for 1065 subjects from HCP
+wmpaths_matrix_list <- list()
+for (i in 1:length(wmpaths_file_names)){
+  matrix_i <- as.matrix(read.csv(paste0("../data/tractography/", wmpaths_file_names[i]), header = TRUE))
+  wmpaths_matrix_list[[i]] <- matrix_i
+}
+
+# Compute average across all subjects
+wmpaths_avg_matrix <- Reduce("+", wmpaths_matrix_list) / length(wmpaths_matrix_list)
+
+# Enforce condition that connections must be non-zero in 10% of patients in order to be non-zero in average
+wmpaths_matrix_all <- simplify2array(wmpaths_matrix_list)
+wmpaths_avg_matrix_10 <- wmpaths_avg_matrix
+for (j in 1:dim(wmpaths_matrix_all)[1]){
+  for (k in 1:dim(wmpaths_matrix_all)[2]){
+    if (wmpaths_avg_matrix[j,k] != 0){
+      if (length(which(wmpaths_matrix_all[j,k,] == 0)) >= (1065*0.9)){
+        wmpaths_avg_matrix_10[j,k] <- 0
+      }
+    }
+  }
+}
+wmpaths_avg_matrix_10 <- round(wmpaths_avg_matrix_10, 0) # round to nearest integer
+
+# Add to connectivity dataframe
+wmpaths_avg_df_10 <- as.data.frame(wmpaths_avg_matrix_10)
+names(wmpaths_avg_df_10) <- parcel_dict$Name
+write.csv(wmpaths_avg_df_10, "../data/connectivity/structural_connectivity_wmpaths.csv", row.names = F)
+for (i in 1:nrow(fc_sc_df)){
+  fc_sc_df$SC_WM_paths[i] <- wmpaths_avg_df_10[fc_sc_df$Parcel_A_ID[i], fc_sc_df$Parcel_B_ID[i]]
+} 
+```
+
+```{r}
+# Structural connectivity (SC) - white matter length (HCP)
+wmlength_file_names <- wm_all_file_names[grepl("_WMLength", wm_all_file_names)]
+
+# Load in WM length data for 1065 subjects from HCP
+wmlength_matrix_list <- list()
+for (i in 1:length(wmlength_file_names)){
+  matrix_i <- as.matrix(read.csv(paste0("../data/tractography/", wmlength_file_names[i]), header = TRUE))
+  wmlength_matrix_list[[i]] <- matrix_i
+}
+
+# Compute average across all subjects
+wmlength_avg_matrix <- Reduce("+", wmlength_matrix_list) / length(wmlength_matrix_list)
+
+# Enforce condition that connections must be non-zero in 10% of patients in order to be non-zero in average
+# wmlength_matrix_all <- simplify2array(wmlength_matrix_list) # memory exhaustive
+wmlength_avg_matrix_10 <- wmlength_avg_matrix
+for (j in 1:dim(wmpaths_matrix_all)[1]){
+  for (k in 1:dim(wmpaths_matrix_all)[2]){
+    if (wmlength_avg_matrix[j,k] != 0){
+      if (length(which(as.numeric(unlist(lapply(wmlength_matrix_list, function(mat) mat[j, k]))) == 0)) >= (1065*0.9)){
+        wmlength_avg_matrix_10[j,k] <- 0
+      }
+    }
+  }
+}
+
+# Ensures values aren't truncated to integers for memory reasons
+for (i in 1:dim(wmlength_avg_matrix)[1]){
+  for (j in 1:dim(wmlength_avg_matrix)[2]){
+    if (wmlength_avg_matrix_10[i,j] != 0){
+      wmlength_avg_matrix_10[i,j] <- wmlength_avg_matrix[i,j]
+    }
+  }
+}
+
+# Add to connectivity dataframe
+wmlength_avg_df_10 <- as.data.frame(wmlength_avg_matrix_10)
+for (i in 1:nrow(fc_sc_df)){
+  fc_sc_df$SC_WM_length[i] <- wmlength_avg_df_10[fc_sc_df$Parcel_A_ID[i], fc_sc_df$Parcel_B_ID[i]]
+} 
+```
+
+```{r}
+# Structural connectivity - Euclidean distance
+# Compute center (mean) of each parcel
+atlas_mean_coordinates_df <- data.frame("mean_x" = rep(NA, 690),
+                                        "mean_y" = rep(NA, 690),
+                                        "mean_z" = rep(NA, 690),
+                                        "parcel" = unique(atlas_whole_positions$parcel)
+                                        )
+
+for (i in 1:nrow(atlas_mean_coordinates_df)){
+  atlas_mean_coordinates_df$mean_x[i] <- mean(atlas_whole_positions$x[atlas_whole_positions$parcel == atlas_mean_coordinates_df$parcel[i]])
+  atlas_mean_coordinates_df$mean_y[i] <- mean(atlas_whole_positions$y[atlas_whole_positions$parcel == atlas_mean_coordinates_df$parcel[i]])
+  atlas_mean_coordinates_df$mean_z[i] <- mean(atlas_whole_positions$z[atlas_whole_positions$parcel == atlas_mean_coordinates_df$parcel[i]])
+}
+
+atlas_pairwise_dist_df <- as.data.frame(as.matrix(dist(atlas_mean_coordinates_df[,c(1:3)], method = "euclidean", diag = TRUE, upper = TRUE)))
+
+for (i in 1:nrow(fc_sc_df)){
+  fc_sc_df$SC_Eucl_dist[i] <- atlas_pairwise_dist_df[fc_sc_df$Parcel_A_ID[i], fc_sc_df$Parcel_B_ID[i]]
+}
+```
+
+```{r}
+# Save connectivity dataframe
+write.csv(fc_sc_df, "../data/connectivity/fc_sc.csv", row.names = F)
+```

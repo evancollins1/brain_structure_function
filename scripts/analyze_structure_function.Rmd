@@ -1,0 +1,2458 @@
+---
+title: "Analyzing structure-function relationships in human brain"
+author: "Evan Collins"
+output: html_document
+date: '2023-08-10'
+---
+
+All code in this markdown document has written by Evan Collins. Any questions can be sent to evantomcollins@gmail.com.
+
+Note that all files generated from `process_neurosynth_data.Rmd`, `compute_connectivities.Rmd`, and `compute_word_embeddings.Rmd` have been included in this GitHub repository. Nevertheless, it is important to note that prior to running the chunks of this R markdown, the following other R markdowns were run to generate some processed data files required for this R markdown: in this order, (1) `process_neurosynth_data.Rmd` was used to process data from Neurosynth into the Yale Brain Atlas space, (2) `compute_word_embeddings` was used to compute word embeddings for the functional terms of Neurosynth, and (3) `compute_connectivities.Rmd` was used to compute functional connectivity and structural connectivity
+
+# 0. Load necessary packages and files
+
+```{r, warning = FALSE, message = FALSE}
+# Load packages
+library(ggplot2)
+library(reticulate)
+library(mclust)
+library(tidyverse)
+library(plotly)
+library(ggseg3d)
+library(lsa)
+library(corrplot)
+library(png)
+library(grid)
+library(ggpubr)
+library(ggbreak) 
+library(patchwork)
+library(Rtsne)
+library(ggrepel)
+library(ggcharts)
+library(igraph)
+library(quanteda)
+library(MASS)
+library(factoextra)
+library(ggtext)
+
+# Load custom functions
+source("utils.R")
+```
+
+```{r}
+# Load files
+
+# Yale Brain Atlas parcel dictionary
+parcel_dict <- read.csv("../data/misc/parcel_dict.csv")
+parcel_names <- parcel_dict$Name
+vertex_number_by_parcel <- parcel_dict$Num_vertex
+
+# Yale Brain Atlas whole brain positions and indices
+atlas_whole_positions <- read.csv("../data/atlas/atlas_whole_positions.csv")
+atlas_whole_indices <- read.csv("../data/atlas/atlas_whole_indices.csv")
+# Yale Brain Atlas left hemisphere positions and indices
+atlas_LH_positions <- read.csv("../data/atlas/atlas_LH_positions.csv")
+atlas_LH_indices <- read.csv("../data/atlas/atlas_LH_indices.csv")
+# Yale Brain Atlas right hemisphere positions and indices
+atlas_RH_positions <- read.csv("../data/atlas/atlas_RH_positions.csv")
+atlas_RH_indices <- read.csv("../data/atlas/atlas_RH_indices.csv")
+# Yale Brain Atlas deep left hemisphere (amygdala, hippocampus, insula) positions and indices
+atlas_deepLH_positions <- read.csv("../data/atlas/atlas_LH_positions.csv")
+atlas_deepLH_indices <- read.csv("../data/atlas/atlas_LH_indices.csv")
+# Yale Brain Atlas deep right hemisphere (amygdala, hippocampus, insula) positions and indices
+atlas_deepRH_positions <- read.csv("../data/atlas/atlas_deepRH_positions.csv")
+atlas_deepRH_indices <- read.csv("../data/atlas/atlas_deepRH_indices.csv")
+
+# Load Neurosynth activation values in Yale Brain Atlas space
+# average z scores for 334 functional terms across 690 parcel
+# generated from process_neurosynth_data.Rmd
+neurosynth_functional_activation_df <- read.csv("../data/neurosynth/neurosynth_functional_activation_database.csv")
+
+# Pairwise distances between word embeddings of Neurosynth functional terms
+# generated from compute_word_embeddings.Rmd
+neurosynth_term_embedding_df <- read.csv("../data/neurosynth/neurosynth_functional_term_word_embeddings.csv")
+neurosynth_term_embedding_pairwise_dist_df <- read.csv("../data/neurosynth/neurosynth_functional_term_word_embeddings_pairwise_distances.csv")
+
+# Load connectivity (690 x 690 dimensions)
+# generated from compute_connectivies.Rmd
+fc_matrix <- as.matrix(read.csv("../data/connectivity/functional_connectivity_neurosynth.csv"))
+sc_matrix <- as.matrix(read.csv("../data/connectivity/structural_connectivity_wmpaths.csv"))
+fc_rsfmri_matrix <- as.matrix(read.csv("../data/connectivity/functional_connectivity_rsfmri.csv"))
+
+# Functional and structural connectivity measures between Yale Brain Atlas parcels
+# generated from compute_connectivies.Rmd
+fc_sc_df <- read.csv("../data/connectivity/fc_sc.csv")
+
+# Load NLP resources
+# Concreteness dictionary (Brysbaert et al. 2014)
+word_concreteness_df <- read.csv("../data/nlp/concreteness_table.csv")
+# Linguistic Inquiry and Word Count (Pennebaker)
+# Not available on GitHub for licensing reasons
+# Visit liwc.app for access
+# Once downloaded, move it into the "data/nlp" folder named as "LIWC2015_Dictionary.dic"
+liwc2015dict <- dictionary(file = "../data/nlp/LIWC2015_Dictionary.dic", format = "LIWC")
+
+# Load in dataframe of optimal structural connectivity metrics
+# generated from optimize_structural_connectivity.ipynb
+sc_sf_metrics_df <- read.csv("../data/connectivity/optimized_sc/sc_metrics_sf_analysis.csv")
+```
+
+# Figure 1
+
+Methods flowchart in Figma
+
+# Figure 2
+
+## Figure 2A
+
+```{r, warning = F}
+fc_sc_df_data <- fc_sc_df[,c(5:9)]
+colnames(fc_sc_df_data) <- c("FC (Parcelsynth)",
+                             "FC (rsfMRI)",
+                             "SC (# WM Paths)",
+                             "SC (WM Length)",
+                             "SC (Eucl. Dist.)")
+```
+
+```{r}
+png(height = 2000, 
+    width = 2400, 
+    file = "../figures/subplots/fig2_corrplot.png")
+
+corrplot(cor(fc_sc_df_data), 
+         p.mat = cor.mtest(fc_sc_df_data, conf.level = .95)$p, 
+         method = "ellipse", 
+         type = "lower", 
+         insig= "blank",
+         addCoef.col = "black", 
+         order = "original", 
+         tl.col = "black",
+         tl.srt = 45,
+         tl.cex = 7,
+         number.cex = 7,
+         cl.cex = 7,
+         cl.length = 3,
+         diag=FALSE)
+```
+
+
+## Figure 2B
+
+```{r, warning = FALSE}
+# FC histogram
+fc_hist <- ggplot(fc_sc_df,
+                   aes(x = FC_Neurosynth)) +
+              geom_histogram(aes(y=..count../sum(..count..)),
+                             binwidth = 0.05, fill = "#F8766D", color = "black") +
+              theme_classic() +
+              xlab("FC (Parcelsynth)") +
+              ylab("Proportion of connections") + 
+              theme(axis.text= element_text(size = 22),
+                    axis.title = element_text(size = 25))
+
+
+ggsave("../figures/subplots/fig2_fc_hist.png", 
+       plot = fc_hist,
+       width = 2000,
+       height = 1500,
+       units = "px")
+```
+
+```{r}
+# SC histogram
+SC_hist <- ggplot(fc_sc_df,
+                   aes(x = SC_WM_paths)) +
+              geom_histogram(aes(y=..count../sum(..count..)),
+                             binwidth = 5, fill = "#F8766D", color = "black") +
+              theme_classic() +
+              xlab("SC (# WM Paths)") +
+              ylab("Proportion of connections") + 
+              theme(axis.text= element_text(size = 22),
+                    axis.title = element_text(size = 25)) +
+              scale_y_break(c(0.025, 0.935), scale= 0.1, ticklabels = c(0.958))
+
+ggsave("../figures/subplots/fig2_sc_hist.png", 
+       plot = SC_hist,
+       width = 2000,
+       height = 1500,
+       units = "px")
+```
+
+## Figure 2C
+
+Network figure generated from `generate_network_plot.ipynb`.
+
+## Figure 2D
+
+Spectral clustering dataframes generated from `spectral_clustering.ipynb`.
+
+```{r}
+# Load in FC and SC spectral cluster designations 
+# generated from spectral_clustering.ipynb
+fc_spec_clust_results_df <- read.csv("../data/connectivity/fc_spectral_clustering_results.csv")
+sc_spec_clust_results_df <- read.csv("../data/connectivity/sc_spectral_clustering_results.csv")
+
+# FC: generate colors for spectral cluster designation
+fc_spec_clust_R <- c()
+fc_spec_clust_G <- c()
+fc_spec_clust_B <- c()
+for (i in 1:690){
+  if (fc_spec_clust_results_df$spectral_cluster[i] == 0){ # red
+    fc_spec_clust_R[i] <- 255
+    fc_spec_clust_G[i] <- 0
+    fc_spec_clust_B[i] <- 0
+  } else if (fc_spec_clust_results_df$spectral_cluster[i] == 1){ # orange
+    fc_spec_clust_R[i] <- 255
+    fc_spec_clust_G[i] <- 127
+    fc_spec_clust_B[i] <- 0
+  } else if (fc_spec_clust_results_df$spectral_cluster[i] == 2){ # yellow
+    fc_spec_clust_R[i] <- 255
+    fc_spec_clust_G[i] <- 255
+    fc_spec_clust_B[i] <- 0
+  } else if (fc_spec_clust_results_df$spectral_cluster[i] == 3){ # green
+    fc_spec_clust_R[i] <- 0
+    fc_spec_clust_G[i] <- 255
+    fc_spec_clust_B[i] <- 0
+  } else if (fc_spec_clust_results_df$spectral_cluster[i] == 4){ # blue
+    fc_spec_clust_R[i] <- 0
+    fc_spec_clust_G[i] <- 0
+    fc_spec_clust_B[i] <- 255
+  }
+}
+
+# SC: generate colors for spectral cluster designation
+sc_spec_clust_R <- c()
+sc_spec_clust_G <- c()
+sc_spec_clust_B <- c()
+for (i in 1:690){
+  if (sc_spec_clust_results_df$new_spectral_cluster[i] == 0){ # red
+    sc_spec_clust_R[i] <- 255
+    sc_spec_clust_G[i] <- 0
+    sc_spec_clust_B[i] <- 0
+  } else if (sc_spec_clust_results_df$new_spectral_cluster[i] == 1){ # orange
+    sc_spec_clust_R[i] <- 255
+    sc_spec_clust_G[i] <- 127
+    sc_spec_clust_B[i] <- 0
+  } else if (sc_spec_clust_results_df$new_spectral_cluster[i] == 2){ # yellow
+    sc_spec_clust_R[i] <- 255
+    sc_spec_clust_G[i] <- 255
+    sc_spec_clust_B[i] <- 0
+  } else if (sc_spec_clust_results_df$new_spectral_cluster[i] == 3){ # green
+    sc_spec_clust_R[i] <- 0
+    sc_spec_clust_G[i] <- 255
+    sc_spec_clust_B[i] <- 0
+  } else if (sc_spec_clust_results_df$new_spectral_cluster[i] == 4){ # blue
+    sc_spec_clust_R[i] <- 0
+    sc_spec_clust_G[i] <- 0
+    sc_spec_clust_B[i] <- 255
+  }
+}
+```
+
+```{r}
+fc_clusters_brain_map <- plot_brain_map(R_values = fc_spec_clust_R, 
+                                        G_values = fc_spec_clust_G, 
+                                        B_values = fc_spec_clust_B)
+fc_clusters_brain_map
+
+ggsave("../figures/subplots/fig2_fc_clusters.png", 
+       plot = fc_clusters_brain_map,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+## Figure 2E
+
+```{r}
+sc_clusters_brain_map <- plot_brain_map(R_values = sc_spec_clust_R, 
+                                        G_values = sc_spec_clust_G, 
+                                        B_values = sc_spec_clust_B)
+sc_clusters_brain_map
+
+ggsave("../figures/subplots/fig2_sc_clusters.png", 
+       plot = sc_clusters_brain_map,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+## Figure 2F-G
+
+These spectral clustering and diffusion mapping figures were generated from `spectral_clustering.ipynb`. 
+
+
+# Figure 3
+
+## Figure 3A
+
+```{r}
+# Create new dataframe for structure-function (SF) by parcel
+# rsq = R squared value of linear model testing how FC is explained by SC
+# Let's first do a linear model predicting FC derived from Neurosynth
+rsq_by_parcel <- c()
+for (i in 1:690){
+  rsq_by_parcel[i] <- summary(lm(FC_Neurosynth ~ SC_WM_paths + SC_WM_length + SC_Eucl_dist, data = fc_sc_df[fc_sc_df$Parcel_A_ID == i | fc_sc_df$Parcel_B_ID == i, ]))$r.squared
+}
+sf_df <- data.frame("parcel" = parcel_dict$Name, "rsq" = rsq_by_parcel)
+
+# Now let's do a linear model predicting FC derived from rsfMRI
+sf_df$rsq_rsfmri <- NA
+for (i in 1:690){
+  sf_df$rsq_rsfmri[i] <- summary(lm(FC_rsfMRI ~ SC_WM_paths + SC_WM_length + SC_Eucl_dist, data = fc_sc_df[fc_sc_df$Parcel_A_ID == i | fc_sc_df$Parcel_B_ID == i, ]))$r.squared
+}
+
+# Plot R squared (measure of SF strength) by parcel (using rsfMRI FC)
+sf_rsq_colors_rsfmri <- get_rgb_lu_for_parcel_values(parcel_values = sf_df$rsq_rsfmri,
+                                                     lower_bound_color = c(255, 255, 255),
+                                                     upper_bound_color = c(0, 0, 255),
+                                                     legend = TRUE,
+                                                     legend_title = bquote("SF"~R^2),
+                                                     legend_values = TRUE)
+
+
+sf_rsq_fig_rsfmri <- plot_brain_map(R_values = sf_rsq_colors_rsfmri[[1]]$R,
+                                    G_values = sf_rsq_colors_rsfmri[[1]]$G,
+                                    B_values = sf_rsq_colors_rsfmri[[1]]$B,
+                                    legend_figure = sf_rsq_colors_rsfmri[[2]],
+                                    )
+
+ggsave("../figures/subplots/fig3_sf_rsq_rsfmri.png", 
+       plot = sf_rsq_fig_rsfmri,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 3B
+
+```{r}
+# Histogram of R squared (measure of SF strength) by parcel (using rsfMRI FC)
+rsq_hist_rsfmri <- ggplot(sf_df,
+                          aes(x = rsq_rsfmri)) +
+                        geom_histogram(aes(y=..count../sum(..count..)),
+                                       binwidth = 0.05, fill = "#00A9FF", color = "black") +
+                        theme_classic() +
+                        xlab(bquote("SF"~R^2)) +
+                        ylab("Proportion of parcels") + 
+                        theme(axis.text= element_text(size = 22),
+                              axis.title = element_text(size = 25))
+
+ggsave("../figures/subplots/fig3_sf_rsq_hist_rsfmri.png", 
+       plot = rsq_hist_rsfmri,
+       width = 2000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Figure 3C
+
+```{r}
+# Bar plot of R squared (measure of SF strength) by brain region (using rsfMRI FC)
+sf_df$lobe <- NA
+sf_df$region <- NA
+sf_df$gyrus <- NA
+for (i in 1:nrow(sf_df)){
+  sf_df$lobe[i] <- parcel_dict$Lobe[parcel_dict$Name == sf_df$parcel[i]]
+  sf_df$region[i] <- parcel_dict$Region[parcel_dict$Name == sf_df$parcel[i]]
+  sf_df$gyrus[i] <- parcel_dict$Gyrus[parcel_dict$Name == sf_df$parcel[i]]
+}
+sf_by_region_rsfmri_df <- data.frame("region" = aggregate(sf_df$rsq_rsfmri, list(sf_df$region), FUN = mean)$Group.1,
+                                     "rsq" = aggregate(sf_df$rsq_rsfmri, list(sf_df$region), FUN = mean)$x,
+                                     "sd" = aggregate(sf_df$rsq_rsfmri, list(sf_df$region), FUN = sd)$x)
+
+region_counts <- count(sf_df$region)
+sf_by_region_rsfmri_df$se <- sf_by_region_rsfmri_df$sd / region_counts$freq
+
+sf_by_region_bar_rsfmri <- bar_chart(data = sf_by_region_rsfmri_df, 
+                                     x = region, 
+                                     y = rsq,
+                                     bar_color = "#00A9FF") + 
+  xlab("") +
+  ylab(bquote("SF"~R^2)) +
+  theme(plot.background = element_rect(fill = "white"),
+  axis.title.x = element_text(colour = "black", size = 25),
+  axis.title.y = element_text(colour = "black"),
+  axis.text.x = element_text(colour = "black"),
+  axis.text.y = element_text(colour = "black"),
+  axis.text = element_text(size = 22)) +
+  geom_errorbar(aes(ymin = rsq - se, ymax = rsq + se),
+                color = "#4f4f4f",
+                width = 0.5, 
+                position = position_dodge(0.9))
+
+ggsave("../figures/subplots/fig3_sf_by_region_bar_rsfmri.png", 
+       plot = sf_by_region_bar_rsfmri,
+       width = 3000,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 3D
+
+```{r}
+# Plot R squared (measure of SF strength) by parcel (using Neurosynth FC)
+sf_rsq_colors_neurosynth <- get_rgb_lu_for_parcel_values(parcel_values = sf_df$rsq,
+                                                         legend = TRUE,
+                                                         legend_title = bquote("SF"~R^2),
+                                                         legend_values = TRUE)
+
+
+sf_rsq_fig_neurosynth <- plot_brain_map(R_values = sf_rsq_colors_neurosynth[[1]]$R,
+                                        G_values = sf_rsq_colors_neurosynth[[1]]$G,
+                                        B_values = sf_rsq_colors_neurosynth[[1]]$B,
+                                        legend_figure = sf_rsq_colors_neurosynth[[2]],
+                                        )
+
+ggsave("../figures/subplots/fig3_sf_rsq_neurosynth.png", 
+       plot = sf_rsq_fig_neurosynth,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 3E
+
+```{r}
+# Histogram of R squared (measure of SF strength) by parcel (using Neurosynth FC)
+rsq_hist_neurosynth <- ggplot(sf_df,
+                              aes(x = rsq)) +
+                        geom_histogram(aes(y=..count../sum(..count..)),
+                                       binwidth = 0.05, fill = "#F8766D", color = "black") +
+                        theme_classic() +
+                        xlab(bquote("SF"~R^2)) +
+                        ylab("Proportion of parcels") + 
+                        theme(axis.text= element_text(size = 22),
+                              axis.title = element_text(size = 25))
+
+ggsave("../figures/subplots/fig3_sf_rsq_hist_neurosynth.png", 
+       plot = rsq_hist_neurosynth,
+       width = 2000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Figure 3F
+
+```{r}
+# Bar plot of R squared (measure of SF strength) by brain region (using Neurosynth FC)
+sf_by_region_neurosynth_df <- data.frame("region" = aggregate(sf_df$rsq, list(sf_df$region), FUN = mean)$Group.1,
+                                         "rsq" = aggregate(sf_df$rsq, list(sf_df$region), FUN = mean)$x,
+                                         "sd" = aggregate(sf_df$rsq, list(sf_df$region), FUN = sd)$x)
+
+region_counts <- count(sf_df$region)
+sf_by_region_neurosynth_df$se <- sf_by_region_neurosynth_df$sd / region_counts$freq
+
+sf_by_region_bar_neurosynth <- bar_chart(data = sf_by_region_neurosynth_df, 
+                                         x = region, 
+                                         y = rsq,
+                                         bar_color = "#F8766D") + 
+  xlab("") +
+  ylab(bquote("SF"~R^2)) +
+  theme(plot.background = element_rect(fill = "white"),
+  axis.title.x = element_text(colour = "black", size = 25),
+  axis.title.y = element_text(colour = "black"),
+  axis.text.x = element_text(colour = "black"),
+  axis.text.y = element_text(colour = "black"),
+  axis.text = element_text(size = 22)) +
+  geom_errorbar(aes(ymin = rsq - se, ymax = rsq + se),
+                color = "#4f4f4f",
+                width = 0.5, 
+                position = position_dodge(0.9))
+
+ggsave("../figures/subplots/fig3_sf_by_region_bar_neurosynth.png", 
+       plot = sf_by_region_bar_neurosynth,
+       width = 3000,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 3G
+
+```{r}
+# Bar plot of SF R squared difference from rsfMRI-derived to Neurosynth-derived
+sf_by_region_diff_df <- data.frame("region" = sf_by_region_neurosynth_df$region)
+sf_by_region_diff_df$rsq_diff <- sf_by_region_neurosynth_df$rsq - sf_by_region_rsfmri_df$rsq
+sf_by_region_diff_df$se <- sf_by_region_neurosynth_df$se + sf_by_region_rsfmri_df$se
+
+sf_by_region_diff_df$color[sf_by_region_diff_df$rsq_diff >= 0] <- "#F8766D"
+sf_by_region_diff_df$color[sf_by_region_diff_df$rsq_diff < 0] <- "#00A9FF"
+
+sf_by_region_diff_bar <- bar_chart(data = sf_by_region_diff_df, 
+                                   x = region, 
+                                   y = rsq_diff,
+                                   bar_color = sf_by_region_diff_df$color) + 
+  xlab("") +
+  ylab(bquote("SF"~R^2~"difference from rsfMRI to Parcelsynth fMRI")) +
+  theme(plot.background = element_rect(fill = "white"),
+  axis.title.x = element_text(colour = "black", size = 25),
+  axis.title.y = element_text(colour = "black"),
+  axis.text.x = element_text(colour = "black"),
+  axis.text.y = element_text(colour = "black"),
+  axis.text = element_text(size = 22)) +
+  geom_errorbar(aes(ymin = rsq_diff - se, ymax = rsq_diff + se),
+                color = "#4f4f4f",
+                width = 0.5, 
+                position = position_dodge(0.9))
+
+ggsave("../figures/subplots/fig3_sf_diff_bar.png", 
+       plot = sf_by_region_diff_bar,
+       width = 4200,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 3H
+
+```{r}
+# Bar plot of SF R squared rank change from rsfMRI-derived to Neurosynth-derived
+sf_by_region_neurosynth_ordered <- sf_by_region_neurosynth_df$region[order(sf_by_region_neurosynth_df$rsq, decreasing = TRUE)]
+sf_by_region_rsfmri_ordered <- sf_by_region_rsfmri_df$region[order(sf_by_region_rsfmri_df$rsq, decreasing = TRUE)]
+
+change_from_rsfmri_to_neurosynth <- c()
+for (i in 1:length(sf_by_region_rsfmri_ordered)){
+  change_from_rsfmri_to_neurosynth[i] <- i - which(sf_by_region_neurosynth_ordered == sf_by_region_rsfmri_ordered[i])
+}
+
+change_df <- data.frame("Function" = sf_by_region_rsfmri_ordered, "Change" = change_from_rsfmri_to_neurosynth)
+change_df$Change_text <- as.character(change_df$Change) 
+for (i in 1:nrow(change_df)){
+  if (change_df$Change_text[i] > 0){
+    change_df$Change_text[i] <- paste0("+", change_df$Change_text[i])
+  }
+}
+change_df$color <- NA
+change_df$color[change_df$Change >= 0] <- "#F8766D"
+change_df$color[change_df$Change < 0] <- "#00A9FF"
+
+change_bar <- bar_chart(data = change_df, 
+                        x = Function, 
+                        y = Change,
+                        bar_color = change_df$color) + 
+                    xlab("") +
+                    ylab(bquote("SF"~R^2~"rank change from rsfMRI to Parcelsynth fMRI")) +
+                    theme(plot.background = element_rect(fill = "white"),
+                      axis.title.x = element_text(colour = "black", size = 25),
+                      axis.title.y = element_text(colour = "black"),
+                      axis.text.x = element_text(colour = "black"),
+                      axis.text.y = element_text(colour = "black"),
+                      axis.text = element_text(size = 22)) + 
+  geom_hline(yintercept = 0, 
+             color = "darkgray", 
+             size = 0.8) +
+  geom_text(aes(y = Change * 0.5, label = Change_text), 
+              position = position_dodge(width = 0.9), 
+              size = 7)
+
+ggsave("../figures/subplots/fig3_sf_change_bar.png", 
+       plot = change_bar,
+       width = 4200,
+       height = 3000,
+       units = "px")
+```
+
+# Figure 4
+
+## Figure 4A
+
+Graphic demonstrating active-active connections and active-inactive connections was created in Figma.
+
+## Figure 4B
+
+```{r}
+# Structure-function by functional term
+# Determine which parcels are active (i.e,. nonzero) for each functional term
+active_parcels_by_term <- list()
+for (i in 1:ncol(neurosynth_functional_activation_df)){
+  active_parcels_by_term[[i]] <- neurosynth_functional_activation_df[,i]
+  active_parcels_by_term[[i]][active_parcels_by_term[[i]] != 0] <- 1
+}
+# For each functional term, create a dataframe which classifies
+# the activity/inactivity of the two parcels making up each pairwise connection 
+term_i_analysis <- list()
+for (i in 1:ncol(neurosynth_functional_activation_df)){
+  term_i_analysis[[i]] <- fc_sc_df[,c(1,2,7,9)]
+  term_i_analysis[[i]]$Parcel_A_type <- NA
+  term_i_analysis[[i]]$Parcel_A_type[term_i_analysis[[i]]$Parcel_A_ID %in% which(neurosynth_functional_activation_df[,i] != 0)] <- "active"
+  term_i_analysis[[i]]$Parcel_A_type[term_i_analysis[[i]]$Parcel_A_ID %in% which(neurosynth_functional_activation_df[,i] == 0)] <- "inactive"
+  term_i_analysis[[i]]$Parcel_B_type <- NA
+  term_i_analysis[[i]]$Parcel_B_type[term_i_analysis[[i]]$Parcel_B_ID %in% which(neurosynth_functional_activation_df[,i] != 0)] <- "active"
+  term_i_analysis[[i]]$Parcel_B_type[term_i_analysis[[i]]$Parcel_B_ID %in% which(neurosynth_functional_activation_df[,i] == 0)] <- "inactive"
+  term_i_analysis[[i]] <- term_i_analysis[[i]][!term_i_analysis[[i]]$Parcel_A_type == "inactive", ]
+  row.names(term_i_analysis[[i]]) <- NULL
+}
+
+# Count the number of active-active parcel connections for each term
+num_active_active_connections <- c()
+for (i in 1:length(term_i_analysis)){
+  num_active_active_connections[i] <- nrow(term_i_analysis[[i]][term_i_analysis[[i]]$Parcel_A_type == "active" & term_i_analysis[[i]]$Parcel_B_type == "active", ])
+}
+
+# Remove functional terms with less than 50 active-active parcel connections
+term_i_analysis_clean <- term_i_analysis[-which(num_active_active_connections < 50)]
+
+# Structure-function by term analysis
+# Compute proportion connected, i.e., 
+# the proportion of all possible connections between the parcels activated for 
+# a particular functional term that have a non-zero number of white matter (WM) streamlines. 
+# Moreover, and more importantly, run a Wilcoxon test to evaluate if the # of WM tracts
+# between active-active parcels is different from those between active-inactive parcels
+# Store the Wilcoxon effect size, p value, and fold change
+prop_connected <- c()
+prop_inactive_connected <- c()
+wilcox_effect_size <- c()
+wilcox_p_value <- c()
+fold_change <- c()
+log_fold_change <- c()
+mean_eucl_dist_active_active <- c()
+mean_eucl_dist_active_inactive <- c()
+for (i in 1:length(term_i_analysis_clean)){
+  # Compute proportion connected
+  prop_connected[i] <- length(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "active" & term_i_analysis_clean[[i]]$SC_WM_paths != 0])/length(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "active"])
+   prop_inactive_connected[i] <- length(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "inactive" & term_i_analysis_clean[[i]]$SC_WM_paths != 0])/length(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "inactive"])
+  wilcox_effect_size[i] <- as.numeric(wilcox.test(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "active"], 
+            term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "inactive"])$statistic/sqrt(nrow(term_i_analysis_clean[[i]])))
+  wilcox_p_value[i] <- wilcox.test(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[1]]$Parcel_B_type == "active"], 
+            term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "inactive"])$p.value
+  fold_change[i] <- mean(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "active"]) - mean(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "inactive"])
+  log_fold_change[i] <- log10(mean(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "active"])) - log10(mean(term_i_analysis_clean[[i]]$SC_WM_paths[term_i_analysis_clean[[i]]$Parcel_B_type == "inactive"]))
+  mean_eucl_dist_active_active[i] <- mean(term_i_analysis_clean[[i]]$SC_Eucl_dist[(term_i_analysis_clean[[i]]$Parcel_B_type == "active")])
+  mean_eucl_dist_active_inactive[i] <- mean(term_i_analysis_clean[[i]]$SC_Eucl_dist[(term_i_analysis_clean[[i]]$Parcel_B_type == "inactive")])
+}
+
+# Make dataframe for SF correspondence by term results above
+# Only select terms that have a minimum of 50 active-active parcel connections
+# This reduces functional terms from 334 to 313
+sf_by_term_df <- data.frame("term" = colnames(neurosynth_functional_activation_df)[-which(num_active_active_connections < 50)],
+                            "prop_connected" = prop_connected,
+                            "prop_connected_std" = prop_connected/prop_inactive_connected,
+                            "wilcox_effect_size" = wilcox_effect_size,
+                            "wilcox_p_value" = wilcox_p_value,
+                            "wilcox_adj_p_value" = length(prop_connected) * wilcox_p_value,
+                            "fold_change" = fold_change,
+                            "log_fold_change" = log_fold_change,
+                            "mean_eucl_dist_active_active" = mean_eucl_dist_active_active,
+                            "mean_eucl_dist_active_inactive" = mean_eucl_dist_active_inactive)
+alpha_crit <- 0.001
+sf_by_term_df$de_label <- NA
+sf_by_term_df$de_label[(sf_by_term_df$wilcox_adj_p_value <= alpha_crit) & (sf_by_term_df$log_fold_change >= 0.5)] <- sf_by_term_df$term[(sf_by_term_df$wilcox_adj_p_value <= alpha_crit) & (sf_by_term_df$log_fold_change >= 0.5)]
+sf_by_term_df$de_label[(sf_by_term_df$wilcox_adj_p_value > alpha_crit) & (sf_by_term_df$log_fold_change < 0.5)] <- sf_by_term_df$term[(sf_by_term_df$wilcox_adj_p_value > alpha_crit) & (sf_by_term_df$log_fold_change < 0.5)]
+
+
+# Define additional variables for plotting aesthetics
+sf_by_term_df$plot_label <- NA
+sf_by_term_df$plot_label[sf_by_term_df$term == "sensorimotor"] <- "sensorimotor"
+sf_by_term_df$plot_label[sf_by_term_df$term == "pain"] <- "pain"
+sf_by_term_df$plot_label[sf_by_term_df$term == "hand"] <- "hand"
+sf_by_term_df$plot_label[sf_by_term_df$term == "emotion"] <- "emotion"
+sf_by_term_df$plot_label[sf_by_term_df$term == "judgment"] <- "judgment"
+sf_by_term_df$plot_label[sf_by_term_df$term == "inference"] <- "inference"
+
+sf_by_term_df$de_color <- "#BDBDBD"
+sf_by_term_df$de_color[(sf_by_term_df$wilcox_adj_p_value <= alpha_crit) & (sf_by_term_df$log_fold_change >= 0.5)] <- "#F8766D"
+sf_by_term_df$de_color[(sf_by_term_df$wilcox_adj_p_value > alpha_crit) & (sf_by_term_df$log_fold_change < 0.5)] <- "#00A9FF"
+
+sf_by_term_df$label_color <- sf_by_term_df$de_color
+sf_by_term_df$label_color[sf_by_term_df$label_color == "#00A9FF"] <- "darkblue"
+sf_by_term_df$label_color[sf_by_term_df$label_color == "#F8766D"] <- "darkred"
+
+sf_by_term_df$nudge_x <- 0
+sf_by_term_df$nudge_x[sf_by_term_df$de_color == "#00A9FF"] <- -0.12
+sf_by_term_df$nudge_x[sf_by_term_df$de_color == "#F8766D"] <- 0.1
+sf_by_term_df$nudge_x[sf_by_term_df$term == "emotion"] <- 0.02
+
+sf_by_term_df$nudge_y <- 1
+sf_by_term_df$nudge_y[sf_by_term_df$term == "emotion"] <- 0
+
+# Plot fold change and p value for the Wilcoxon test
+# This serves as a right-sided volcano-type plot to isolate terms
+# with higher (green) and lower (red) structure-function strength 
+
+# Supplementary plot showing all term labels
+sf_by_term_fold_p_all_plot <-
+  ggplot(
+  data = sf_by_term_df, 
+  aes(x = log_fold_change, 
+      y = -log10(wilcox_adj_p_value),
+      label = de_label)) +
+        geom_point(col = sf_by_term_df$de_color, alpha = 0.5, size = 3) + 
+        theme_classic() +
+        geom_text_repel(col = sf_by_term_df$de_color, size = 3.5, max.overlaps = getOption("ggrepel.max.overlaps", default = 18)) +
+        geom_vline(xintercept = c(0.5), col = "#424242", linetype = "dashed") +
+        geom_hline(yintercept = -log10(10e-3), col = "#424242", linetype = "dashed") +
+  xlab("log10(FoldChange)") +
+  ylab("-log10(pValue)") +
+  xlim(c(0.1, 1.48)) +
+  annotate("text", x = 1.4, y = 3.5, label = paste0("p = ", alpha_crit), color = "#424242") +
+  theme(axis.text = element_text(size = 16),
+        axis.title.x = element_text(colour = "black", size = 16),
+        axis.title.y = element_text(colour = "black", size = 16))
+
+ggsave("../figures/subplots/supp_sf_by_term_fold_p_all_plot.png", 
+       plot = sf_by_term_fold_p_all_plot,
+       width = 2500,
+       height = 2500,
+       units = "px")
+
+# Plot for main figure with 6 select terms labeled 
+sf_by_term_fold_p_plot <-
+  ggplot(
+  data = sf_by_term_df, 
+  aes(x = log_fold_change, 
+      y = -log10(wilcox_adj_p_value),
+      label = plot_label)) +
+        geom_point(col = sf_by_term_df$de_color, alpha = 0.5, size = 5) + 
+        theme_classic() +
+        geom_text_repel(col = sf_by_term_df$label_color, size = 8, max.overlaps = getOption("ggrepel.max.overlaps", default = 18), nudge_y = sf_by_term_df$nudge_y, nudge_x = sf_by_term_df$nudge_x) +
+        geom_vline(xintercept = c(0.5), col = "#424242", linetype = "dashed") +
+        geom_hline(yintercept = -log10(10e-4), col = "#424242", linetype = "dashed") +
+  xlab("log10(FoldChange)") +
+  ylab("-log10(pValue)") +
+  xlim(c(0.1, 1.48)) +
+  annotate("text", x = 1.4, y = 3.7, label = "p = 0.001", color = "#424242", size = 6) +
+  theme(axis.text = element_text(size = 22),
+        axis.title.x = element_text(colour = "black", size = 25),
+        axis.title.y = element_text(colour = "black", size = 25))
+
+ggsave("../figures/subplots/fig4_sf_by_term_fold_p_plot.png", 
+       plot = sf_by_term_fold_p_plot,
+       width = 2500,
+       height = 2500,
+       units = "px")
+
+# List of significant terms ordered by log(FoldChange)
+# Used as table figure in Figure 4B
+sf_by_term_sig_df <- sf_by_term_df[sf_by_term_df$wilcox_adj_p_value < alpha_crit,]
+sf_by_term_sig_df <- sf_by_term_sig_df[order(sf_by_term_sig_df$log_fold_change, decreasing = T),]
+
+sf_by_term_insig_df <- sf_by_term_df[sf_by_term_df$wilcox_adj_p_value >= alpha_crit,]
+sf_by_term_insig_df <- sf_by_term_insig_df[order(sf_by_term_insig_df$log_fold_change, decreasing = F),]
+```
+
+
+## Figure 4C
+
+```{r}
+# Plot dimensionally-reduced embedding plot of functional terms
+# Color by volcano quadrants of Figure 4B above
+sf_by_term_embedding_df <- neurosynth_term_embedding_df[colnames(neurosynth_functional_activation_df) %in% sf_by_term_df$term, ]
+rownames(sf_by_term_embedding_df) <- colnames(neurosynth_functional_activation_df)[colnames(neurosynth_functional_activation_df) %in% sf_by_term_df$term]
+# Run tSNE
+# Eventually uncomment
+tsne <- Rtsne(as.matrix(sf_by_term_embedding_df), perplexity = 10, pca = TRUE, dims = 2)
+sf_by_term_tsne_df <- as.data.frame(tsne$Y)
+names(sf_by_term_tsne_df) <- c("tSNE1", "tSNE2")
+sf_by_term_tsne_df$wilcox_adj_p_value <- sf_by_term_df$wilcox_adj_p_value
+sf_by_term_tsne_df$log_fold_change <- sf_by_term_df$log_fold_change
+sf_by_term_tsne_df$term <- rownames(sf_by_term_embedding_df)
+sf_by_term_tsne_df$label_color <- sf_by_term_df$label_color
+sf_by_term_tsne_df$plot_label <- sf_by_term_df$plot_label
+
+# Blue terms = strong/significant structure-function
+# logFC >= 0.5 and p <= 0.001
+# Red terms = weak/insignificant structure-function
+# logFC < 0.5 and p > 0.001
+# Define additional variables for plotting aesthetics
+sf_by_term_tsne_df$de_label <- NA
+sf_by_term_tsne_df$de_label[(sf_by_term_tsne_df$wilcox_adj_p_value <= alpha_crit) & (sf_by_term_tsne_df$log_fold_change >= 0.5)] <- sf_by_term_tsne_df$term[(sf_by_term_tsne_df$wilcox_adj_p_value <= alpha_crit) & (sf_by_term_tsne_df$log_fold_change >= 0.5)]
+sf_by_term_tsne_df$de_color <- "#BDBDBD"
+sf_by_term_tsne_df$de_color[(sf_by_term_tsne_df$wilcox_adj_p_value <= alpha_crit) & (sf_by_term_tsne_df$log_fold_change >= 0.5)] <- "#F8766D"
+sf_by_term_tsne_df$de_color[(sf_by_term_tsne_df$wilcox_adj_p_value > alpha_crit) & (sf_by_term_tsne_df$log_fold_change < 0.5)] <- "#00A9FF"
+sf_by_term_tsne_df$nudge_x <- 0
+sf_by_term_tsne_df$nudge_x[sf_by_term_tsne_df$de_color == "#00A9FF"] <- -3
+sf_by_term_tsne_df$nudge_x[sf_by_term_tsne_df$de_color == "#F8766D"] <- 2
+
+# Supplementary plot showing all term labels
+sf_by_term_tsne_all_plot <-
+  ggplot(
+  data = sf_by_term_tsne_df, 
+  aes(x = tSNE1, 
+      y = tSNE2,
+      label = de_label)) +
+        geom_point(col = sf_by_term_tsne_df$de_color, alpha = 0.5, size = 4) + 
+        theme_classic() +
+        geom_text_repel(col = sf_by_term_tsne_df$de_color, size = 4, max.overlaps = getOption("ggrepel.max.overlaps", default = 14)) +
+  xlab("tSNE1") +
+  ylab("tSNE2") +
+  ggtitle("Functional term embeddings") +
+  theme(axis.text = element_text(size = 16),
+        axis.title.x = element_text(colour = "black", size = 16),
+        axis.title.y = element_text(colour = "black", size = 16),
+        plot.title = element_text(hjust = 0.5, size = 16))
+
+ggsave("../figures/subplots/supp_sf_by_term_tsne_all_plot.png", 
+       plot = sf_by_term_tsne_all_plot,
+       width = 2500,
+       height = 2500,
+       units = "px")
+
+# Supplementary plot colored by log(FoldChange)
+sf_by_term_tsne_fc_plot <-
+  ggplot(
+  data = sf_by_term_tsne_df, 
+  aes(x = tSNE1, 
+      y = tSNE2,
+      color = log_fold_change)) +
+        geom_point(alpha = 0.95, size = 4) + 
+        theme_classic() +
+  xlab("tSNE1") +
+  ylab("tSNE2") +
+  scale_color_gradient(low = "#00A9FF", high = "#F8766D", name = "log10(FoldChange)") +
+  ggtitle("Functional term embeddings") +
+  theme(axis.text = element_text(size = 22),
+        axis.title.x = element_text(colour = "black", size = 22),
+        axis.title.y = element_text(colour = "black", size = 22),
+        plot.title = element_text(hjust = 0.5, size = 22),
+        legend.text = element_text(size = 14),
+        legend.title = element_text(size = 14))
+
+ggsave("../figures/subplots/supp_sf_by_term_tsne_fc_plot.png", 
+       plot = sf_by_term_tsne_fc_plot,
+       width = 2500,
+       height = 2500,
+       units = "px")
+
+# Plot for main figure with 6 select terms labeled 
+sf_by_term_tsne_plot <-
+  ggplot(
+  data = sf_by_term_tsne_df, 
+  aes(x = tSNE1, 
+      y = tSNE2,
+      label = plot_label)) +
+        geom_point(col = sf_by_term_tsne_df$de_color, alpha = 0.5, size = 5) + 
+        theme_classic() +
+        geom_text_repel(col = sf_by_term_tsne_df$label_color, size = 8, max.overlaps = getOption("ggrepel.max.overlaps", default = 14), nudge_x = sf_by_term_tsne_df$nudge_x) +
+  xlab("tSNE1") +
+  ylab("tSNE2") +
+  ggtitle("Functional term embeddings") +
+  theme(axis.text.x = element_blank(),
+        axis.text.y = element_blank(),
+        axis.title.x = element_text(colour = "black", size = 25),
+        axis.title.y = element_text(colour = "black", size = 25),
+        axis.ticks.x = element_blank(),
+        axis.ticks.y = element_blank(),
+        plot.title = element_text(hjust = 0.5, size = 25))
+
+ggsave("../figures/subplots/fig4_sf_by_term_tsne_plot.png", 
+       plot = sf_by_term_tsne_plot,
+       width = 2700,
+       height = 2000,
+       units = "px")
+```
+
+
+## Figure 4D
+
+```{r}
+# Plot boxplot of tSNE1 embedding across High SF and Low SF terms
+sf_by_term_grouped_df <- sf_by_term_tsne_df[sf_by_term_tsne_df$de_color != "#BDBDBD",]
+sf_by_term_grouped_df$sf_strength <- "High SF"
+sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$de_color == "#00A9FF"] <- "Low SF"
+sf_by_term_grouped_df$sf_strength_binary <- sf_by_term_grouped_df$sf_strength
+sf_by_term_grouped_df$sf_strength_binary[sf_by_term_grouped_df$sf_strength_binary == "High SF"] <- 1
+sf_by_term_grouped_df$sf_strength_binary[sf_by_term_grouped_df$sf_strength_binary == "Low SF"] <- 0
+sf_by_term_grouped_df$sf_strength_binary <- as.numeric(sf_by_term_grouped_df$sf_strength_binary)
+
+wilcox_p_value_tsne1 <- sprintf("%.2e", wilcox.test(sf_by_term_grouped_df$tSNE1[sf_by_term_grouped_df$sf_strength == "High SF"], sf_by_term_grouped_df$tSNE1[sf_by_term_grouped_df$sf_strength == "Low SF"])$p.value)
+
+# Plot tSNE1
+sf_by_term_tsne1_box <-
+  ggplot(sf_by_term_grouped_df, 
+       aes(x = sf_strength, y = tSNE1, fill = sf_strength)) + 
+  geom_boxplot(notch = T) +
+  theme_classic() +
+  xlab("") +
+  ylab("tSNE1") +
+  scale_fill_manual(values = c("#F8766D", "#00A9FF")) +
+  ggtitle(paste0("p = ", wilcox_p_value_tsne1)) + 
+  theme(axis.text = element_text(size = 22),
+        axis.title.x = element_text(colour = "black", size = 22),
+        axis.title.y = element_text(colour = "black", size = 22),
+        plot.title = element_text(hjust = 0.5, size = 22)) +
+  guides(fill="none")
+
+ggsave("../figures/subplots/fig4_sf_by_term_tsne1_box.png", 
+       plot = sf_by_term_tsne1_box,
+       width = 1250,
+       height = 2500,
+       units = "px")
+
+# Supplementary plot showing correlation between tSNE1 and log(FoldChange)
+sf_by_term_tsne1_fc_line <-
+  ggplot(sf_by_term_grouped_df, 
+         aes(x = tSNE1, y = log_fold_change)) + 
+          geom_point(color = "#154360", size = 4, alpha = 0.7) + 
+          geom_smooth(method = lm, se = FALSE, color = "red") + 
+          theme_classic() +
+          xlab("Functional term embeddings tSNE1") +
+          ylab("log10(FoldChange)") + 
+          ggtitle(paste0("p = ", sprintf("%.2e", summary(lm(log_fold_change ~ tSNE1, data = sf_by_term_grouped_df))$coef[2,4]), ", R<sup>2</sup> = ", round(summary(lm(log_fold_change ~ tSNE1, data = sf_by_term_grouped_df))$r.squared, 2))) + 
+          theme(axis.text = element_text(size = 22),
+                axis.title = element_text(size = 22),
+                plot.title = element_markdown(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/supp_sf_by_term_tsne1_fc_line.png", 
+       plot = sf_by_term_tsne1_fc_line,
+       width = 2500,
+       height = 2500,
+       units = "px")
+        
+# Plot boxplot of PC1 embedding across High SF and Low SF terms
+sf_by_term_pca_df <- prcomp(sf_by_term_embedding_df, center = TRUE, scale = TRUE)
+sf_by_term_pca_coord_df <- as.data.frame(sf_by_term_pca_df$x)
+
+sf_by_term_grouped_df$PC1 <- sf_by_term_pca_coord_df$PC1[sf_by_term_tsne_df$de_color != "#BDBDBD"]
+sf_by_term_grouped_df$PC2 <- sf_by_term_pca_coord_df$PC2[sf_by_term_tsne_df$de_color != "#BDBDBD"]
+
+wilcox_p_value_pc1 <- sprintf("%.2e", wilcox.test(sf_by_term_grouped_df$PC1[sf_by_term_grouped_df$sf_strength == "High SF"], sf_by_term_grouped_df$PC1[sf_by_term_grouped_df$sf_strength == "Low SF"])$p.value)
+
+# Plot PC1
+sf_by_term_pc1_box <-
+  ggplot(sf_by_term_grouped_df, 
+       aes(x = sf_strength, y = PC1, fill = sf_strength)) + 
+  geom_boxplot(notch = T) +
+  theme_classic() +
+  xlab("") +
+  ylab("PC1") +
+  scale_fill_manual(values = c("#F8766D", "#00A9FF")) +
+  ggtitle(paste0("p = ", wilcox_p_value_pc1)) + 
+  theme(axis.text = element_text(size = 22),
+        axis.title.x = element_text(colour = "black", size = 22),
+        axis.title.y = element_text(colour = "black", size = 22),
+        plot.title = element_text(hjust = 0.5, size = 22)) +
+  guides(fill="none")
+
+ggsave("../figures/subplots/fig4_sf_by_term_pc1_box.png", 
+       plot = sf_by_term_pc1_box,
+       width = 1250,
+       height = 2500,
+       units = "px")
+
+# Supplementary plot showing correlation between PC1 and log(FoldChange)
+sf_by_term_pc1_fc_line <-
+  ggplot(sf_by_term_grouped_df, 
+         aes(x = PC1, y = log_fold_change)) + 
+          geom_point(color = "#154360", size = 4, alpha = 0.7) + 
+          geom_smooth(method = lm, se = FALSE, color = "red") + 
+          theme_classic() +
+          xlab("Functional term embeddings PC1") +
+          ylab("log10(FoldChange)") + 
+          ggtitle(paste0("p = ", sprintf("%.2e", summary(lm(log_fold_change ~ PC1, data = sf_by_term_grouped_df))$coef[2,4]), ", R<sup>2</sup> = ", round(summary(lm(log_fold_change ~ PC1, data = sf_by_term_grouped_df))$r.squared, 2))) + 
+          theme(axis.text = element_text(size = 22),
+                axis.title = element_text(size = 22),
+                plot.title = element_markdown(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/supp_sf_by_term_pc1_fc_line.png", 
+       plot = sf_by_term_pc1_fc_line,
+       width = 2500,
+       height = 2500,
+       units = "px")
+```
+
+
+## Figure 4E
+
+```{r}
+# Plot concreteness score across High SF and Low SF terms
+# Concreteness dictionary from Brysbaert et al. 2014; measure of sensory-motor nature of word
+sf_by_term_grouped_df$concreteness <- NA
+for (i in 1:nrow(sf_by_term_grouped_df)){
+  if (sf_by_term_grouped_df$term[i] %in% word_concreteness_df$Word){
+    # Extract mean concreteness score from the dictionary for each term
+   sf_by_term_grouped_df$concreteness[i] <- word_concreteness_df$Conc.M[word_concreteness_df$Word == sf_by_term_grouped_df$term[i]] 
+  }
+}
+
+wilcox_p_value_concreteness <- sprintf("%.2e", wilcox.test(sf_by_term_grouped_df$concreteness[sf_by_term_grouped_df$sf_strength == "High SF"], sf_by_term_grouped_df$concreteness[sf_by_term_grouped_df$sf_strength == "Low SF"])$p.value)
+
+# Plot
+sf_by_term_concreteness_box <-
+  ggplot(sf_by_term_grouped_df, 
+       aes(x = sf_strength, y = concreteness, fill = sf_strength)) + 
+  geom_boxplot(notch = T) +
+  theme_classic() +
+  xlab("") +
+  ylab("Concreteness") +
+  scale_fill_manual(values = c("#F8766D", "#00A9FF")) +
+  ggtitle(paste0("p = ", wilcox_p_value_concreteness)) + 
+  theme(axis.text = element_text(size = 22),
+        axis.title.x = element_text(colour = "black", size = 22),
+        axis.title.y = element_text(colour = "black", size = 22),
+        plot.title = element_text(hjust = 0.5, size = 22)) +
+  guides(fill="none")
+
+# 10 terms out of 163 do not have concreteness values (NA); omitted
+
+ggsave("../figures/subplots/fig4_sf_by_term_concreteness_box.png", 
+       plot = sf_by_term_concreteness_box,
+       width = 1250,
+       height = 2500,
+       units = "px")
+
+# Supplementary plot showing correlation between concreteness and log(FoldChange)
+sf_by_term_concreteness_fc_line <-
+  ggplot(sf_by_term_grouped_df, 
+         aes(x = concreteness, y = log_fold_change)) + 
+          geom_point(color = "#154360", size = 4, alpha = 0.7) + 
+          geom_smooth(method = lm, se = FALSE, color = "red") + 
+          theme_classic() +
+          xlab("Concreteness (Sensory-motor) score") +
+          ylab("log10(FoldChange)") + 
+          ggtitle(paste0("p = ", sprintf("%.2e", summary(lm(log_fold_change ~ concreteness, data = sf_by_term_grouped_df))$coef[2,4]), ", R<sup>2</sup> = ", round(summary(lm(log_fold_change ~ concreteness, data = sf_by_term_grouped_df))$r.squared, 2))) + 
+          theme(axis.text = element_text(size = 22),
+                axis.title = element_text(size = 22),
+                plot.title = element_markdown(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/supp_sf_by_term_concreteness_fc_line.png", 
+       plot = sf_by_term_concreteness_fc_line,
+       width = 2500,
+       height = 2500,
+       units = "px")
+```
+
+
+## Figure 4F
+
+```{r}
+# Plot proportioin of High SF and Low SF terms across different semantic categories
+# Semantic categorization from Linguistic Inquiry and Word Count (Pennebaker)
+# Tally LIWC categorization (binary) for the terms of interest
+liwc_terms_df <- as.data.frame(dfm(sf_by_term_grouped_df$term, dictionary = liwc2015dict))
+# Add to dataframe
+sf_by_term_grouped_df$affect <- as.factor(liwc_terms_df$affect)
+sf_by_term_grouped_df$social <- as.factor(liwc_terms_df$social)
+sf_by_term_grouped_df$cogproc <- as.factor(liwc_terms_df$cogproc)
+sf_by_term_grouped_df$percept <- as.factor(liwc_terms_df$percept)
+sf_by_term_grouped_df$bio <- as.factor(liwc_terms_df$bio)
+sf_by_term_grouped_df$drives <- as.factor(liwc_terms_df$drives)
+sf_by_term_grouped_df$relativ <- as.factor(liwc_terms_df$relativ)
+
+# Create new dataframe for storing proportion values
+sf_liwc_prop_df <- data.frame("category" = c(rep("Perceptual", 2), 
+                                             rep("Cognitive", 2),
+                                             rep("Biological", 2),
+                                             rep("Affect", 2),
+                                             rep("Social", 2),
+                                             rep("Other", 2)
+                                             ),
+                              "prop" = c(sum(as.numeric(liwc_terms_df$percept)[sf_by_term_grouped_df$sf_strength == "High SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "High SF"]),
+                                         sum(as.numeric(liwc_terms_df$percept)[sf_by_term_grouped_df$sf_strength == "Low SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "Low SF"]), 
+                                         sum(as.numeric(liwc_terms_df$cogproc)[sf_by_term_grouped_df$sf_strength == "High SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "High SF"]),
+                                         sum(as.numeric(liwc_terms_df$cogproc)[sf_by_term_grouped_df$sf_strength == "Low SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "Low SF"]),
+                                         sum(as.numeric(liwc_terms_df$bio)[sf_by_term_grouped_df$sf_strength == "High SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "High SF"]),
+                                         sum(as.numeric(liwc_terms_df$bio)[sf_by_term_grouped_df$sf_strength == "Low SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "Low SF"]),
+                                         sum(as.numeric(liwc_terms_df$affect)[sf_by_term_grouped_df$sf_strength == "High SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "High SF"]),
+                                         sum(as.numeric(liwc_terms_df$affect)[sf_by_term_grouped_df$sf_strength == "Low SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "Low SF"]), 
+                                         sum(as.numeric(liwc_terms_df$social)[sf_by_term_grouped_df$sf_strength == "High SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "High SF"]),
+                                         sum(as.numeric(liwc_terms_df$social)[sf_by_term_grouped_df$sf_strength == "Low SF"])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "Low SF"]),
+                                         nrow(sf_by_term_grouped_df[(sf_by_term_grouped_df$sf_strength == "High SF") & (sf_by_term_grouped_df$percept == "0") & (sf_by_term_grouped_df$cogproc == "0") & (sf_by_term_grouped_df$affect == "0") & (sf_by_term_grouped_df$social == "0") & (sf_by_term_grouped_df$bio == "0"),])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "High SF"]),
+                                         nrow(sf_by_term_grouped_df[(sf_by_term_grouped_df$sf_strength == "Low SF") & (sf_by_term_grouped_df$percept == "0") & (sf_by_term_grouped_df$cogproc == "0") & (sf_by_term_grouped_df$affect == "0") & (sf_by_term_grouped_df$social == "0") & (sf_by_term_grouped_df$bio == "0"),])/length(sf_by_term_grouped_df$sf_strength[sf_by_term_grouped_df$sf_strength == "Low SF"])
+                                         ),
+                              "sf_strength" = rep(c("High SF", "Low SF"), 6)
+                             )
+
+sf_liwc_prop_df$category <- factor(sf_liwc_prop_df$category, levels = unique(sf_liwc_prop_df$category))
+
+# Plot
+sf_liwc_prop_bar <-
+  ggplot(sf_liwc_prop_df[sf_liwc_prop_df$category != "Other", ], 
+       aes(fill = sf_strength, y = prop, x = category)) + 
+    geom_bar(position="dodge", stat="identity", color = "black") +
+  theme_classic() +
+  scale_fill_manual(values = c("#F8766D", "#00A9FF")) +
+  guides(fill=guide_legend(title="")) +
+  ylab("Proportion of terms") +
+  xlab("LIWC category") +
+  ylim(c(0, 0.33)) +
+  theme(axis.text = element_text(size = 22),
+        axis.title.x = element_text(colour = "black", size = 22),
+        axis.title.y = element_text(colour = "black", size = 22),
+        plot.title = element_text(hjust = 0.5, size = 22),
+        legend.text=element_text(size = 22)) +
+  annotate("text", 
+           size = 7,
+           x = c(1:5), 
+           y = c(0.025 + max(sf_liwc_prop_df$prop[sf_liwc_prop_df$category == "Perceptual"]), 
+                 0.025 + max(sf_liwc_prop_df$prop[sf_liwc_prop_df$category == "Cognitive"]),
+                 0.025 + max(sf_liwc_prop_df$prop[sf_liwc_prop_df$category == "Biological"]),
+                 0.025 + max(sf_liwc_prop_df$prop[sf_liwc_prop_df$category == "Affect"]),
+                 0.025 + max(sf_liwc_prop_df$prop[sf_liwc_prop_df$category == "Social"])
+                 ), 
+           label = c(paste0("p = ", round(fisher.test(table(sf_by_term_grouped_df$sf_strength, sf_by_term_grouped_df$percept))$p.value, 4)), 
+                     paste0("p = ", round(fisher.test(table(sf_by_term_grouped_df$sf_strength, sf_by_term_grouped_df$cogproc))$p.value, 3)), 
+                     paste0("p = ", round(fisher.test(table(sf_by_term_grouped_df$sf_strength, sf_by_term_grouped_df$bio))$p.value, 3)), 
+                     paste0("p = ", round(fisher.test(table(sf_by_term_grouped_df$sf_strength, sf_by_term_grouped_df$affect))$p.value, 3)), 
+                     paste0("p = ", round(fisher.test(table(sf_by_term_grouped_df$sf_strength, sf_by_term_grouped_df$social))$p.value, 3))))
+
+ggsave("../figures/subplots/fig4_sf_by_term_liwc_bar.png", 
+       plot = sf_liwc_prop_bar,
+       width = 3500,
+       height = 2000,
+       units = "px")
+
+# Supplementary plot showing boxplot of log(FoldChange) across Perceptual terms
+# Select for significant terms - relax to alpha critical of 0.01 to include more terms
+sf_by_term_sig_grouped_df <- sf_by_term_grouped_df[sf_by_term_grouped_df$wilcox_adj_p_value > 0.01, ]
+sf_by_term_perceptual_box <-
+  ggplot(sf_by_term_grouped_df, 
+       aes(x = percept, y = log_fold_change, fill = percept)) + 
+  geom_boxplot(notch = T) +
+  theme_classic() +
+  xlab("Perceptual") +
+  ylab("log10(FoldChange)") +
+  scale_fill_manual(values = c("#0CB702", "#C77CFF")) +
+  ggtitle(paste0("p = ", round(wilcox.test(sf_by_term_grouped_df$log_fold_change[sf_by_term_grouped_df$percept == 1], sf_by_term_grouped_df$log_fold_change[sf_by_term_grouped_df$percept == 0])$p.value, 2))) + 
+  theme(axis.text = element_text(size = 22),
+        axis.title.x = element_text(colour = "black", size = 22),
+        axis.title.y = element_text(colour = "black", size = 22),
+        plot.title = element_text(hjust = 0.5, size = 22)) +
+  guides(fill="none")
+
+ggsave("../figures/subplots/supp_sf_by_term_perceptual_box.png", 
+       plot = sf_by_term_perceptual_box,
+       width = 1250,
+       height = 2500,
+       units = "px")
+
+# Supplementary plot demonstrating relationship between log(FoldChange) and mean Euclidean distance
+sf_by_term_grouped_df$mean_eucl_dist_active_active <- NA
+sf_by_term_grouped_df$mean_eucl_dist_active_inactive <- NA
+for (i in 1:nrow(sf_by_term_grouped_df)){
+  sf_by_term_grouped_df$mean_eucl_dist_active_active[i] <- sf_by_term_df$mean_eucl_dist_active_active[sf_by_term_df$term == sf_by_term_grouped_df$term[i]]
+  sf_by_term_grouped_df$mean_eucl_dist_active_inactive[i] <- sf_by_term_df$mean_eucl_dist_active_inactive[sf_by_term_df$term == sf_by_term_grouped_df$term[i]]
+}
+sf_by_term_eucldist_fc_line <-
+  ggplot(sf_by_term_grouped_df, 
+         aes(x = mean_eucl_dist_active_active, y = log_fold_change)) + 
+          geom_point(color = "#154360", size = 4, alpha = 0.7) + 
+          geom_smooth(method = lm, se = FALSE, color = "red") + 
+          theme_classic() +
+          xlab("Mean Euclidean distance between active parcels") +
+          ylab("log10(FoldChange)") + 
+          ggtitle(paste0("p = ", round(summary(lm(log_fold_change ~ mean_eucl_dist_active_active, data = sf_by_term_grouped_df))$coef[2,4], 2), ", R<sup>2</sup> = ", round(summary(lm(log_fold_change ~ mean_eucl_dist_active_active, data = sf_by_term_grouped_df))$r.squared, 2))) + 
+          theme(axis.text = element_text(size = 22),
+                axis.title = element_text(size = 22),
+                plot.title = element_markdown(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/supp_sf_by_term_eucldist_fc_line.png", 
+       plot = sf_by_term_eucldist_fc_line,
+       width = 2500,
+       height = 2500,
+       units = "px")
+```
+
+
+# Figure 5
+
+## Figure 5A
+
+```{r}
+# Brain map of FC diffusion component #1
+# Load diffusion axes computed from Python notebook 
+# spectral_clustering.ipynb
+fc_diff_df <- read.csv("../data/connectivity/fc_diffusion.csv")
+# Add to SF dataframe by parcel; scale
+sf_df$fc_diff1 <- scale(fc_diff_df$fc_diff1)
+sf_df$fc_diff2 <- scale(fc_diff_df$fc_diff2)
+
+# Plot FC diffusion component #1 coordinate by parcel
+fc_diff1_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$fc_diff1),
+                                                 zeroed = TRUE,
+                                                 legend = TRUE,
+                                                 legend_values = FALSE,
+                                                 legend_title = "FC diffusion 1")
+
+
+sf_fc_diff1_brain <- plot_brain_map(R_values = fc_diff1_colors[[1]]$R,
+                                    G_values = fc_diff1_colors[[1]]$G,
+                                    B_values = fc_diff1_colors[[1]]$B
+                                    )
+
+ggsave("../figures/subplots/fig5_sf_fc_diff1_brain.png", 
+       plot = sf_fc_diff1_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 5B
+
+```{r}
+# Correlation between FC diffusion component #1 and SF R squared
+rsq_fc_diff1_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = fc_diff1)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("FC diffusion 1") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$fc_diff1, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$fc_diff1, method = "spearman", exact = FALSE)$p.value))) + 
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig5_rsq_fc_diff1_line.png", 
+       plot = rsq_fc_diff1_line,
+       width = 2200,
+       height = 1400,
+       units = "px")
+```
+
+
+## Figure 5C
+
+```{r}
+# Brain map of PC1 from Neurosynth activation data
+# Run PCA
+pca_neurosynth_results <- prcomp(neurosynth_functional_activation_df, center = TRUE)
+# Add to SF dataframe by parcel;
+sf_df$fa_pc1 <- -1*scale(pca_neurosynth_results$x[,1]) # scale and multiply by -1 to make more plot friendly
+
+# Plot PC1 by parcel
+fa_pc1_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$fa_pc1),
+                                               zeroed = TRUE,
+                                               legend = TRUE,
+                                               legend_values = FALSE,
+                                               legend_title = "FA PC1")
+
+
+sf_fa_pc1_brain <- plot_brain_map(R_values = fa_pc1_colors[[1]]$R,
+                                  G_values = fa_pc1_colors[[1]]$G,
+                                  B_values = fa_pc1_colors[[1]]$B
+                                  )
+
+ggsave("../figures/subplots/fig5_sf_fa_pc1_brain.png", 
+       plot = sf_fa_pc1_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 5D
+
+```{r}
+# Correlation between PC1 and SF R squared
+rsq_fa_pc1_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = fa_pc1)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("FA PC1") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$fa_pc1, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$fa_pc1, method = "spearman", exact = FALSE)$p.value))) + 
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig5_rsq_fa_pc1_line.png", 
+       plot = rsq_fa_pc1_line,
+       width = 2200,
+       height = 1400,
+       units = "px")
+```
+
+## Figure 5E
+
+```{r}
+# Brain map of functional diversity by parcel
+# Functional diversity
+# Get mean distance between word embeddings of top 10 functional terms for each parcel
+# Compute ean distance to centroid
+mean_dist_centroid_emb_top10w_by_parcel <- rep(NA, nrow(neurosynth_functional_activation_df))
+for (i in 1:nrow(neurosynth_functional_activation_df)){ # for each parcel, check nonzero zscores
+  centroid_i_coord <- colMeans(as.matrix(neurosynth_term_embedding_df[order(as.numeric(neurosynth_functional_activation_df[i,]), decreasing = TRUE)[1:10], ]))
+  mean_dist_centroid_emb_top10w_by_parcel[i] <- weighted.mean(as.matrix(dist(rbind(neurosynth_term_embedding_df[order(as.numeric(neurosynth_functional_activation_df[i,]), decreasing = TRUE)[1:10], ], centroid_i_coord), method = "euclidean"))[11,1:10], c(10:1))
+}
+
+sf_df$func_div <- scale(mean_dist_centroid_emb_top10w_by_parcel)
+
+# Plot functional diversity by parcel
+func_div_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$func_div),
+                                               zeroed = TRUE,
+                                               legend = TRUE,
+                                               legend_values = FALSE,
+                                               legend_title = "Functional diversity")
+
+sf_func_div_brain <- plot_brain_map(R_values = func_div_colors[[1]]$R,
+                                    G_values = func_div_colors[[1]]$G,
+                                    B_values = func_div_colors[[1]]$B
+                                    )
+
+ggsave("../figures/subplots/fig5_sf_func_div_brain.png", 
+       plot = sf_func_div_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 5F
+
+```{r}
+# Correlation between functional diversity and SF R squared
+rsq_func_div_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = func_div)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Functional diversity") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$func_div, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$func_div, method = "spearman", exact = FALSE)$p.value))) + 
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig5_rsq_func_div_line.png", 
+       plot = rsq_func_div_line,
+       width = 2200,
+       height = 1400,
+       units = "px")
+```
+
+
+## Figure 5G
+
+```{r}
+# Brain map of concreteness (sensory-motor score) by parcel
+# Compute mean concreteness score for top 10 functional terms for each parcel
+concreteness_mean_top10w_by_parcel <- rep(NA, nrow(neurosynth_functional_activation_df))
+for (i in 1:nrow(neurosynth_functional_activation_df)){ # for each parcel, check nonzero zscores
+  nonzero_top10_terms_i <- colnames(neurosynth_functional_activation_df[,order(as.numeric(neurosynth_functional_activation_df[i,]), decreasing = TRUE)[1:10]])
+  concreteness_mean_top10w_by_parcel[i] <- weighted.mean(word_concreteness_df$Conc.M[which(word_concreteness_df$Word %in% nonzero_top10_terms_i)], c(length(which(word_concreteness_df$Word %in% nonzero_top10_terms_i)):1))
+}
+
+sf_df$concreteness <- scale(concreteness_mean_top10w_by_parcel)
+
+# Plot concreteness by parcel
+concreteness_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$concreteness),
+                                                     zeroed = TRUE,
+                                                     legend = TRUE,
+                                                     legend_values = FALSE,
+                                                     legend_title = "Concreteness")
+
+sf_concreteness_brain <- plot_brain_map(R_values = concreteness_colors[[1]]$R,
+                                        G_values = concreteness_colors[[1]]$G,
+                                        B_values = concreteness_colors[[1]]$B
+                                        )
+
+ggsave("../figures/subplots/fig5_sf_concreteness_brain.png", 
+       plot = sf_concreteness_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 5H
+
+```{r}
+# Correlation between sensory-motor score (concreteness) and SF R squared
+rsq_concreteness_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = concreteness)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Concreteness") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$concreteness, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$concreteness, method = "spearman", exact = FALSE)$p.value))) + 
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig5_rsq_concreteness_line.png", 
+       plot = rsq_concreteness_line,
+       width = 2200,
+       height = 1400,
+       units = "px")
+```
+
+
+## Figure 5I
+
+```{r}
+# Brain map of extent of perceptual function in each parcel
+# Make list of 10 functional terms with highest Neurosynth activation for each parcel
+functional_terms_list_top10w <- c(NA, 690)
+for (i in 1:nrow(neurosynth_functional_activation_df)){
+  functional_terms_list_top10w[i] <- paste(rep(colnames(neurosynth_functional_activation_df)[order(as.numeric(neurosynth_functional_activation_df[i,]), decreasing = TRUE)[1:10]], c(10:1)), collapse = " ")
+}
+
+# Initialize vectors for storing percent of words that are in specific LIWC semantic categories by parcel
+affect_percent_w_by_parcel <- c(NA, 690)
+social_percent_w_by_parcel <- c(NA, 690)
+cogproc_percent_w_by_parcel <- c(NA, 690)
+percept_percent_w_by_parcel <- c(NA, 690)
+bio_percent_w_by_parcel <- c(NA, 690)
+drives_percent_w_by_parcel <- c(NA, 690)
+relativ_percent_w_by_parcel <- c(NA, 690)
+
+# Semantic categorization from Linguistic Inquiry and Word Count (Pennebaker)
+# Tally LIWC categorization (binary) for the terms of interest
+liwc_text_functional_terms_list <- as.data.frame(dfm(functional_terms_list_top10w, dictionary = liwc2015dict))
+# Computed as percents (divide by the total number of terms weighted by rank; thus 10 words have length 55)
+for (i in 1:nrow(liwc_text_functional_terms_list)){
+  affect_percent_w_by_parcel[i] <- 100 * liwc_text_functional_terms_list[i,]$affect / sum(1:10)
+  social_percent_w_by_parcel[i] <- 100 * liwc_text_functional_terms_list[i,]$social / sum(1:10)
+  cogproc_percent_w_by_parcel[i] <- 100 * liwc_text_functional_terms_list[i,]$cogproc / sum(1:10)
+  percept_percent_w_by_parcel[i] <- 100 * liwc_text_functional_terms_list[i,]$percept / sum(1:10)
+  bio_percent_w_by_parcel[i] <- 100 * liwc_text_functional_terms_list[i,]$bio / sum(1:10)
+  drives_percent_w_by_parcel[i] <- 100 * liwc_text_functional_terms_list[i,]$drives / sum(1:10)
+  relativ_percent_w_by_parcel[i] <- 100 * liwc_text_functional_terms_list[i,]$relativ / sum(1:10)
+}
+
+# Add to SF dataframe; scale for aesthetic reasons
+sf_df$percept <- scale(percept_percent_w_by_parcel)
+sf_df$cogproc <- scale(cogproc_percent_w_by_parcel)
+sf_df$bio <- scale(bio_percent_w_by_parcel)
+
+# Plot perceptual function by parcel
+percept_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$percept),
+                                                zeroed = TRUE,
+                                                legend = TRUE,
+                                                legend_values = FALSE,
+                                                legend_title = "Perceptual")
+
+sf_percept_brain <- plot_brain_map(R_values = percept_colors[[1]]$R,
+                                   G_values = percept_colors[[1]]$G,
+                                   B_values = percept_colors[[1]]$B
+                                   )
+
+ggsave("../figures/subplots/fig5_sf_percept_brain.png", 
+       plot = sf_percept_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 5J
+
+```{r}
+# Correlation between perceptual function and SF R squared
+rsq_percept_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = percept)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Perceptual function") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$percept, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$percept, method = "spearman", exact = FALSE)$p.value))) + 
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig5_rsq_percept_line.png", 
+       plot = rsq_percept_line,
+       width = 2200,
+       height = 1400,
+       units = "px")
+```
+
+
+## Figure 5K
+
+```{r}
+# Plot cognitive function by parcel
+cogproc_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$cogproc),
+                                                zeroed = TRUE,
+                                                legend = TRUE,
+                                                legend_values = FALSE,
+                                                legend_title = "Perceptual")
+
+sf_cogproc_brain <- plot_brain_map(R_values = cogproc_colors[[1]]$R,
+                                   G_values = cogproc_colors[[1]]$G,
+                                   B_values = cogproc_colors[[1]]$B
+                                   )
+
+ggsave("../figures/subplots/fig5_sf_cogproc_brain.png", 
+       plot = sf_cogproc_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 5L
+
+```{r}
+# Correlation between cognitive function and SF R squared
+rsq_cogproc_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = cogproc)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Cognitive function") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$cogproc, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$cogproc, method = "spearman", exact = FALSE)$p.value))) + 
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig5_rsq_cogproc_line.png", 
+       plot = rsq_cogproc_line,
+       width = 2200,
+       height = 1400,
+       units = "px")
+```
+
+
+## Figure 5M
+
+```{r}
+# Plot biological function by parcel
+bio_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$bio),
+                                            zeroed = TRUE,
+                                            legend = TRUE,
+                                            legend_values = FALSE,
+                                            legend_title = "Biological")
+
+sf_bio_brain <- plot_brain_map(R_values = bio_colors[[1]]$R,
+                               G_values = bio_colors[[1]]$G,
+                               B_values = bio_colors[[1]]$B
+                               )
+
+ggsave("../figures/subplots/fig5_sf_bio_brain.png", 
+       plot = sf_bio_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+## Figure 5N
+
+```{r}
+# Correlation between biological function and SF R squared
+rsq_bio_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = bio)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Biological function") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$bio, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$bio, method = "spearman", exact = FALSE)$p.value))) + 
+  theme(axis.text= element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5))
+
+ggsave("../figures/subplots/fig5_rsq_bio_line.png", 
+       plot = rsq_bio_line,
+       width = 2200,
+       height = 1400,
+       units = "px")
+```
+
+
+# Figure 6
+
+## Figure 6A
+
+```{r}
+# Brain map of cortical thickness
+# Compute cortical thickness mean across 100 healthy subjects
+cort_thick_files <- list.files("../data/cortical_thickness")
+# Get cortical thickness for eaech parcel for each subject
+cort_thick_vec_sub <- list()
+for (i in 1:length(cort_thick_files)){
+  csv_sub <- read.csv(paste0("../data/cortical_thickness/",cort_thick_files[i]), header = FALSE)
+  cort_thick_vec_sub[[i]] <- as.numeric(csv_sub[1,]) # the first row stores the cortical thickness in mm
+}
+# Compute mean across 100 subjects for the 690 parcels
+cort_thick_mean <- rep(NA, length(cort_thick_vec_sub[[1]]))
+for (i in 1:length(cort_thick_vec_sub[[1]])){
+  cort_thick_index <- rep(NA, length(cort_thick_vec_sub))
+  for (j in 1:length(cort_thick_vec_sub)){
+    cort_thick_index[j] <- cort_thick_vec_sub[[j]][i]
+  }
+  cort_thick_mean[i] <- mean(cort_thick_index, na.rm = TRUE)
+}
+
+# Add to dataframe
+sf_df$cort_thick <- cort_thick_mean
+
+# Plot cortical thickness by parcel
+cort_thick_colors <- get_rgb_lmu_for_parcel_values(parcel_values = as.numeric(sf_df$cort_thick),
+                                                   zeroed = FALSE,
+                                                   legend = TRUE,
+                                                   legend_values = TRUE,
+                                                   legend_title = "mm")
+
+sf_cort_thick_brain <- plot_brain_map(R_values = cort_thick_colors[[1]]$R,
+                                      G_values = cort_thick_colors[[1]]$G,
+                                      B_values = cort_thick_colors[[1]]$B,
+                                      legend_figure = cort_thick_colors[[2]],
+                                      )
+
+ggsave("../figures/subplots/fig6_sf_cort_thick_brain.png", 
+       plot = sf_cort_thick_brain,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+## Figure 6B
+
+```{r}
+# Plot relationship between cortical thickness and SF R squared (colored by axial coordinate) for all parcels
+sf_df$mean_x <- parcel_dict$mean_x # sagittal
+sf_df$mean_y <- parcel_dict$mean_y # coronal
+sf_df$mean_z <- parcel_dict$mean_z # axial
+
+cort_thick_rsq_line <- 
+  ggplot(sf_df, 
+         aes(x = rsq, y = cort_thick, color = mean_z)) + 
+  geom_point(size = 3, alpha = 0.7) + 
+  scale_color_viridis_c(name = paste0("Axial (Z)\np = ", sprintf("%.2e", cor.test(x = sf_df$mean_z, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$p.value))) +
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Cortical thickness (mm)") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$p.value))) +
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5),
+        legend.key.size = unit(1, 'cm'),
+        legend.key.height = unit(1, 'cm'), 
+        legend.key.width = unit(1, 'cm'), 
+        legend.title = element_text(size = 20), 
+        legend.text = element_text(size = 16)) 
+
+ggsave("../figures/subplots/fig6_cort_thick_rsq_line.png", 
+       plot = cort_thick_rsq_line,
+       width = 2500,
+       height = 2000,
+       units = "px")
+```
+
+
+## Figure 6C
+
+```{r}
+# Plot relationship between cortical thickness and SF R squared (colored by coronal coordinate) for just parietal lobe parcels
+cort_thick_rsq_parietal_line <- 
+  ggplot(sf_df[sf_df$lobe == "Parietal", ], 
+         aes(x = rsq, y = cort_thick, color = mean_z)) + 
+  geom_point(size = 3, alpha = 0.7) + 
+  scale_color_viridis_c(name = paste0("Axial (Z)\np = ", sprintf("%.2e", cor.test(x = sf_df$mean_z[sf_df$lobe == "Parietal"], y = sf_df$cort_thick[sf_df$lobe == "Parietal"], method = "spearman", exact = FALSE)$p.value))) +
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Cortical thickness (mm)") + 
+  ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$rsq[sf_df$lobe == "Parietal"], y = sf_df$cort_thick[sf_df$lobe == "Parietal"], method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$rsq[sf_df$lobe == "Parietal"], y = sf_df$cort_thick[sf_df$lobe == "Parietal"], method = "spearman", exact = FALSE)$p.value))) +
+  theme(axis.text= element_text(size = 22),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 22, hjust = 0.5),
+        legend.key.size = unit(1, 'cm'),
+        legend.key.height = unit(1, 'cm'), 
+        legend.key.width = unit(1, 'cm'), 
+        legend.title = element_text(size = 20), 
+        legend.text = element_text(size = 16)) 
+
+ggsave("../figures/subplots/fig6_cort_thick_rsq_parietal_line.png", 
+       plot = cort_thick_rsq_parietal_line,
+       width = 2500,
+       height = 2000,
+       units = "px")
+```
+
+
+## Figure 6D
+
+```{r}
+# Plot correlation between cortical thickness and functional diffusion gradient
+#cor.test(y = sf_df$fc_diff1, x = sf_df$cort_thick, method = "spearman")
+cort_thick_fcdiff1_line <- 
+  ggplot(sf_df, 
+         aes(x = fc_diff1, y = cort_thick)) + 
+    geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+    geom_smooth(method = lm, se = FALSE, color = "red") + 
+    theme_classic() +
+    ylab("Cortical thickness (mm)") +
+    xlab("FC diffusion 1") + 
+    ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$fc_diff1, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$fc_diff1, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$p.value))) + 
+    theme(axis.text= element_text(size = 20),
+          axis.title = element_text(size = 22),
+          plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig6_cort_thick_fcdiff1_line.png", 
+       plot = cort_thick_fcdiff1_line,
+       width = 2000,
+       height = 1500,
+       units = "px")
+```
+
+
+## Figure 6E
+
+```{r}
+# Plot correlation between cortical thickness and functional diversity
+cort_thick_func_div_line <- 
+  ggplot(sf_df, 
+         aes(x = func_div, y = cort_thick)) + 
+    geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+    geom_smooth(method = lm, se = FALSE, color = "red") + 
+    theme_classic() +
+    ylab("Cortical thickness (mm)") +
+    xlab("Functional diversity") + 
+    ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$func_div, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$func_div, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$p.value))) + 
+    theme(axis.text= element_text(size = 20),
+          axis.title = element_text(size = 22),
+          plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig6_cort_thick_func_div_line.png", 
+       plot = cort_thick_func_div_line,
+       width = 2000,
+       height = 1500,
+       units = "px")
+```
+
+
+## Figure 6F
+
+```{r}
+# Plot correlation between cortical thickness and concreteness (sensory-motor)
+cort_thick_concreteness_line <- 
+  ggplot(sf_df, 
+         aes(x = concreteness, y = cort_thick)) + 
+    geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+    geom_smooth(method = lm, se = FALSE, color = "red") + 
+    theme_classic() +
+    ylab("Cortical thickness (mm)") +
+    xlab("Concreteness (Sensory-motor function)") + 
+    ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$concreteness, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$concreteness, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$p.value))) + 
+    theme(axis.text= element_text(size = 20),
+          axis.title = element_text(size = 22),
+          plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig6_cort_thick_concreteness_line.png", 
+       plot = cort_thick_concreteness_line,
+       width = 2000,
+       height = 1500,
+       units = "px")
+```
+
+
+## Figure 6G
+
+```{r}
+# Plot correlation between cortical thickness and perceptual function
+cort_thick_percept_line <- 
+  ggplot(sf_df, 
+         aes(x = percept, y = cort_thick)) + 
+    geom_point(color = "#154360", size = 3, alpha = 0.5) + 
+    geom_smooth(method = lm, se = FALSE, color = "red") + 
+    theme_classic() +
+    ylab("Cortical thickness (mm)") +
+    xlab("Perceptual function") + 
+    ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$percept, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 sprintf("%.2e", cor.test(x = sf_df$percept, y = sf_df$cort_thick, method = "spearman", exact = FALSE)$p.value))) + 
+    theme(axis.text= element_text(size = 20),
+          axis.title = element_text(size = 22),
+          plot.title = element_text(size = 22, hjust = 0.5))
+
+ggsave("../figures/subplots/fig6_cort_thick_percept_line.png", 
+       plot = cort_thick_percept_line,
+       width = 2000,
+       height = 1500,
+       units = "px")
+```
+
+
+# Additional supplementary figures
+
+## Supplementary 1 
+
+This figure was produced from `spectral_clustering.ipynb`.
+
+## Supplementary 2
+
+```{r}
+# SF R squared vs. structural degree
+sc_matrix_binary <- sc_matrix
+sc_matrix_binary[sc_matrix_binary != 0] <- 1
+sf_df$sc_degree <- rowSums(sc_matrix_binary)
+
+sc_degree_line <- ggplot(sf_df, 
+                         aes(x = sc_degree, y = rsq)) + 
+                    geom_point(color = "#154360", size = 3, alpha = 0.7) + 
+                    geom_smooth(method = lm, se = FALSE, color = "red") + 
+                    theme_classic() +
+                    ylab(bquote("SF"~R^2)) +
+                    xlab("SC degree") +
+                    ggtitle(paste0("Spearman r = ",
+                 round(cor.test(x = sf_df$sc_degree, y = sf_df$rsq, method = "spearman", exact = FALSE)$estimate, 2), 
+                 ", p = ",
+                 round(cor.test(x = sf_df$sc_degree, y = sf_df$rsq, method = "spearman", exact = FALSE)$p.value, 2))) + 
+                    theme(axis.text= element_text(size = 15),
+                          axis.title = element_text(size = 20),
+                          plot.title = element_text(size = 20, hjust = 0.5))
+
+ggsave("../figures/subplots/supp_sc_degree_line.png", 
+       plot = sc_degree_line,
+       width = 2000,
+       height = 2000,
+       units = "px")
+
+
+# SF R squared vs. functional degree (Parcelsynth)
+sf_df$fc_neurosynth_degree <- rowSums(fc_matrix)
+
+fc_neurosynth_degree_line <- ggplot(sf_df, 
+                                    aes(x = fc_neurosynth_degree, y = rsq)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.7) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  ylab(bquote("SF"~R^2)) +
+  xlab("FC (Parcelsynth) degree") +
+  ggtitle(paste0("Spearman r = ",
+round(cor.test(x = sf_df$fc_neurosynth_degree, y = sf_df$rsq, method = "spearman", exact = FALSE)$estimate, 2), 
+", p = ",
+sprintf("%.2e", cor.test(x = sf_df$fc_neurosynth_degree, y = sf_df$rsq, method = "spearman", exact = FALSE)$p.value))) +
+  theme(axis.text= element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5))
+
+ggsave("../figures/subplots/supp_fc_neurosynth_degree_line.png", 
+       plot = fc_neurosynth_degree_line,
+       width = 2000,
+       height = 2000,
+       units = "px")
+
+
+# SF R squared vs. functional degree (rsfMRI)
+sf_df$fc_rsfmri_degree <- rowSums(fc_rsfmri_matrix)
+
+fc_rsfmri_degree_line <- ggplot(sf_df, 
+                                    aes(x = fc_rsfmri_degree, y = rsq)) + 
+  geom_point(color = "#154360", size = 3, alpha = 0.7) + 
+  geom_smooth(method = lm, se = FALSE, color = "red") + 
+  theme_classic() +
+  ylab(bquote("SF"~R^2)) +
+  xlab("FC (rsfMRI) degree") +
+  ggtitle(paste0("Spearman r = ",
+round(cor.test(x = sf_df$fc_rsfmri_degree, y = sf_df$rsq, method = "spearman", exact = FALSE)$estimate, 2), 
+", p = ",
+sprintf("%.2e", cor.test(x = sf_df$fc_rsfmri_degree, y = sf_df$rsq, method = "spearman", exact = FALSE)$p.value))) +
+  theme(axis.text= element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5))
+
+ggsave("../figures/subplots/supp_fc_rsfmri_degree_line.png", 
+       plot = fc_rsfmri_degree_line,
+       width = 2000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Supplementary 3
+
+Dataframe of optimized SC metrics was generated from `compute_structural_connectivity_metrics.m` and further processed in `optimize_structural_connectivity.ipynb`.
+
+```{r}
+# Plot optimized SC metric by parcel
+# Redefine predictor variable names to more self-explanatory
+sc_sf_metrics_df$Best.Predictor_simple <- sc_sf_metrics_df$Best.Predictor
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "a"] <- "Raw"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "d"] <- "Eucl. dist."
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "PLbin"] <- "Path length"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "PLwei1"] <- "Path length"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "Cosbin"] <- "Cosine"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "Coswei"] <- "Cosine"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "FGwei1"] <- "Flow graph"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "FGwei2"] <- "Flow graph"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "FGwei3"] <- "Flow graph"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "FGwei4"] <- "Flow graph"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "Gwei"] <- "Communicability"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "mfptwei"] <- "MFPT"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "MIbin"] <- "Matching index"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "MIwei"] <- "Matching index"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "NavplMS"] <- "Navigability"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "PTbin"] <- "Path transitivity"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "PTwei1"] <- "Path transitivity"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "PTwei2"] <- "Path transitivity"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "PTwei3"] <- "Path transitivity"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "PTwei4"] <- "Path transitivity"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "SIwei1"] <- "Search info"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "SIwei2"] <- "Search info"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "SIwei3"] <- "Search info"
+sc_sf_metrics_df$Best.Predictor_simple[sc_sf_metrics_df$Best.Predictor_simple == "SIwei4"] <- "Search info"
+
+# Designate colors to each SC predictor
+sc_metrics_R <- c()
+sc_metrics_G <- c()
+sc_metrics_B <- c()
+for (i in 1:nrow(sc_sf_metrics_df)){
+  if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Communicability"){ # red
+    sc_metrics_R[i] <- 255
+    sc_metrics_G[i] <- 0
+    sc_metrics_B[i] <- 0
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Cosine"){ # orange
+    sc_metrics_R[i] <- 255
+    sc_metrics_G[i] <- 127
+    sc_metrics_B[i] <- 0
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Eucl. dist."){ # yellow
+    sc_metrics_R[i] <- 255
+    sc_metrics_G[i] <- 255
+    sc_metrics_B[i] <- 0
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Flow graph"){ # green
+    sc_metrics_R[i] <- 0
+    sc_metrics_G[i] <- 255
+    sc_metrics_B[i] <- 0
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Matching index"){ # spring green
+    sc_metrics_R[i] <- 0
+    sc_metrics_G[i] <- 255
+    sc_metrics_B[i] <- 127
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "MFPT"){ # cyan
+    sc_metrics_R[i] <- 0
+    sc_metrics_G[i] <- 255
+    sc_metrics_B[i] <- 255
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Navigability"){ # dodger blue
+    sc_metrics_R[i] <- 0
+    sc_metrics_G[i] <- 127
+    sc_metrics_B[i] <- 255
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Path length"){ # blue
+    sc_metrics_R[i] <- 0
+    sc_metrics_G[i] <- 0
+    sc_metrics_B[i] <- 255
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Path transitivity"){ # purple
+    sc_metrics_R[i] <- 127
+    sc_metrics_G[i] <- 0
+    sc_metrics_B[i] <- 255
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Raw"){ # violet
+    sc_metrics_R[i] <- 255
+    sc_metrics_G[i] <- 0
+    sc_metrics_B[i] <- 255
+  } else if (sc_sf_metrics_df$Best.Predictor_simple[i] == "Search info"){ # magenta
+    sc_metrics_R[i] <- 255
+    sc_metrics_G[i] <- 0
+    sc_metrics_B[i] <- 127
+  }
+}
+
+
+sc_sf_metrics_df$rsq_raw <- sf_df$rsq
+
+# Plot bar graph of optimal SC metric
+optimal_sc_predictor_bar <- 
+  ggplot(sc_sf_metrics_df, 
+       aes(y = Best.Predictor_simple, 
+           x = Best.Predictor.Rsquare,
+           fill = Best.Predictor_simple)) + 
+  scale_fill_manual(values = c(rgb(255, 0, 0, maxColorValue = 255),
+                               rgb(255, 127, 0, maxColorValue = 255),
+                               rgb(255, 255, 0, maxColorValue = 255),
+                               rgb(0, 255, 0, maxColorValue = 255),
+                               rgb(0, 255, 127, maxColorValue = 255),
+                               rgb(0, 255, 255, maxColorValue = 255),
+                               rgb(0, 127, 255, maxColorValue = 255),
+                               rgb(0, 0, 255, maxColorValue = 255),
+                               rgb(127, 0, 255, maxColorValue = 255),
+                               rgb(255, 0, 255, maxColorValue = 255),
+                               rgb(255, 0, 127, maxColorValue = 255)
+                               )) +
+  geom_boxplot() +
+  xlab(bquote("SF"~R^2)) +
+  ylab("Optimal SC predictor") +
+  theme_classic() +
+  theme(axis.text= element_text(size = 20),
+        axis.title = element_text(size = 22),
+        plot.title = element_text(size = 20, hjust = 0.5),
+        legend.key.size = unit(1, 'cm'),
+        legend.key.height = unit(1, 'cm'), 
+        legend.key.width = unit(1, 'cm'), 
+        legend.title = element_text(size=15), 
+        legend.text = element_text(size=14)) +
+  guides(fill="none")
+
+ggsave("../figures/subplots/supp_optimal_sc_predictor_bar.png", 
+       plot = optimal_sc_predictor_bar,
+       width = 3000,
+       height = 2000,
+       units = "px")
+
+# Plot best SC predictor R squared by parcel
+optimal_sc_colors <- get_rgb_lu_for_parcel_values(parcel_values = sc_sf_metrics_df$Best.Predictor.Rsquare,
+                                                  legend = TRUE,
+                                                  legend_title = bquote("Optimal SF"~R^2),
+                                                  legend_values = TRUE)
+
+
+optimal_sc_sf_fig <- plot_brain_map(R_values = optimal_sc_colors[[1]]$R,
+                                    G_values = optimal_sc_colors[[1]]$G,
+                                    B_values = optimal_sc_colors[[1]]$B,
+                                    legend_figure = optimal_sc_colors[[2]],
+                                    )
+
+ggsave("../figures/subplots/supp_optimal_sc_sf_fig.png", 
+       plot = optimal_sc_sf_fig,
+       width = 5100,
+       height = 3000,
+       units = "px")
+
+
+# Plot optimized SC predictor by parcel
+sc_metrics_fig <- plot_brain_map(R_values = sc_metrics_R,
+                                 G_values = sc_metrics_G,
+                                 B_values = sc_metrics_B,
+                                 )
+
+ggsave("../figures/subplots/supp_sc_metrics_fig.png", 
+       plot = sc_metrics_fig,
+       width = 5100,
+       height = 3000,
+       units = "px")
+```
+
+
+# Supplementary 4
+
+Consists of supplementary figures prepared in above code chunks for Figures 4B and 4C.
+
+
+# Supplementary 5
+
+Consists of supplementary figures prepared in above code chunks for Figures 4C, 4D, 4E, and 4F.
+
+
+# Supplementary 6
+
+## Supplementary 6A
+
+```{r}
+# Spin tests for macroscale functional gradients
+# FC diffusion 1
+
+# null model spin test
+coef_list <- rep(NA, 10000)
+for (i in 1:10000){ # number of trials
+  random_ordered_vector <- sample(sf_df$fc_diff1)
+  coef_list[i] <- cor.test(y = sf_df$rsq, x = random_ordered_vector, method = "spearman")$estimate
+}
+
+measured_cor_value <- cor.test(y = sf_df$rsq, x = sf_df$fc_diff1, method = "spearman")$estimate
+
+# P value from spin test
+spin_test_p_value <- length(which(coef_list > measured_cor_value))/length(coef_list)
+# p value of 0 here suggests less than 1/number of runs
+
+coef_list_df <- data.frame("coef" = coef_list)
+
+fc_diff_spin <-
+  ggplot(coef_list_df, aes(x=coef)) + 
+  geom_histogram(color="black", 
+                 fill="#F8766D",
+                 bins = 50,
+                 alpha = 0.7) +
+  geom_vline(aes(xintercept = measured_cor_value),
+             color = "#00BFC4", linetype = "dashed", size = 1.5) +
+  theme_classic() +
+  xlab("Spearman r") +
+  ylab("Count (10,000 runs)") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  ggtitle(paste0("FC diffusion 1: Spearman r = ", round(measured_cor_value, 2), ", p < 1e-4"))
+
+
+ggsave("../figures/subplots/supp_fc_diff_spin.png", 
+       plot = fc_diff_spin,
+       width = 3000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Supplementary 6B
+
+```{r}
+# Spin tests for macroscale functional gradients
+# FA PC1
+
+# null model spin test
+coef_list <- rep(NA, 10000)
+for (i in 1:10000){ # number of trials
+  random_ordered_vector <- sample(sf_df$fc_diff1)
+  coef_list[i] <- cor.test(y = sf_df$rsq, x = random_ordered_vector, method = "spearman")$estimate
+}
+
+measured_cor_value <- cor.test(y = sf_df$rsq, x = sf_df$fa_pc1, method = "spearman")$estimate
+
+# P value from spin test
+spin_test_p_value <- length(which(coef_list > measured_cor_value))/length(coef_list)
+# p value of 0 here suggests less than 1/number of runs
+
+coef_list_df <- data.frame("coef" = coef_list)
+
+fa_pc1_spin <-
+  ggplot(coef_list_df, aes(x=coef)) + 
+  geom_histogram(color="black", 
+                 fill="#F8766D",
+                 bins = 50,
+                 alpha = 0.7) +
+  geom_vline(aes(xintercept = measured_cor_value),
+             color = "#00BFC4", linetype = "dashed", size = 1.5) +
+  theme_classic() +
+  xlab("Spearman r") +
+  ylab("Count (10,000 runs)") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  ggtitle(paste0("FA PC1: Spearman r = ", round(measured_cor_value, 2), ", p < 1e-4"))
+
+
+ggsave("../figures/subplots/supp_fa_pc1_spin.png", 
+       plot = fa_pc1_spin,
+       width = 3000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Supplementary 6C
+
+```{r}
+# Spin tests for macroscale functional gradients
+# Functional diversity
+
+# null model spin test
+coef_list <- rep(NA, 10000)
+for (i in 1:10000){ # number of trials
+  random_ordered_vector <- sample(sf_df$fc_diff1)
+  coef_list[i] <- cor.test(y = sf_df$rsq, x = random_ordered_vector, method = "spearman")$estimate
+}
+
+measured_cor_value <- cor.test(y = sf_df$rsq, x = sf_df$func_div, method = "spearman")$estimate
+
+# P value from spin test
+spin_test_p_value <- length(which(coef_list < measured_cor_value))/length(coef_list)
+
+coef_list_df <- data.frame("coef" = coef_list)
+
+func_div_spin <-
+  ggplot(coef_list_df, aes(x=coef)) + 
+  geom_histogram(color="black", 
+                 fill="#F8766D",
+                 bins = 50,
+                 alpha = 0.7) +
+  geom_vline(aes(xintercept = measured_cor_value),
+             color = "#00BFC4", linetype = "dashed", size = 1.5) +
+  theme_classic() +
+  xlab("Spearman r") +
+  ylab("Count (10,000 runs)") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  ggtitle(paste0("Functional diversity: Spearman r = ", round(measured_cor_value, 2), ", p = 2e-4"))
+
+
+ggsave("../figures/subplots/supp_func_div_spin.png", 
+       plot = func_div_spin,
+       width = 3000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Supplementary 6D
+
+```{r}
+# Spin tests for macroscale functional gradients
+# Concreteness (Sensory-motor function)
+
+# null model spin test
+coef_list <- rep(NA, 10000)
+for (i in 1:10000){ # number of trials
+  random_ordered_vector <- sample(sf_df$fc_diff1)
+  coef_list[i] <- cor.test(y = sf_df$rsq, x = random_ordered_vector, method = "spearman")$estimate
+}
+
+measured_cor_value <- cor.test(y = sf_df$rsq, x = sf_df$concreteness, method = "spearman")$estimate
+
+# P value from spin test
+spin_test_p_value <- length(which(coef_list > measured_cor_value))/length(coef_list)
+# p value of 0 here suggests less than 1/number of runs
+
+coef_list_df <- data.frame("coef" = coef_list)
+
+concreteness_spin <-
+  ggplot(coef_list_df, aes(x=coef)) + 
+  geom_histogram(color="black", 
+                 fill="#F8766D",
+                 bins = 50,
+                 alpha = 0.7) +
+  geom_vline(aes(xintercept = measured_cor_value),
+             color = "#00BFC4", linetype = "dashed", size = 1.5) +
+  theme_classic() +
+  xlab("Spearman r") +
+  ylab("Count (10,000 runs)") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  ggtitle(paste0("Sensory-motor function: Spearman r = ", round(measured_cor_value, 2), ", p < 1e-4"))
+
+
+ggsave("../figures/subplots/supp_concreteness_spin.png", 
+       plot = concreteness_spin,
+       width = 3000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Supplementary 6E
+
+```{r}
+# Spin tests for macroscale functional gradients
+# Perceptual function
+
+# null model spin test
+coef_list <- rep(NA, 10000)
+for (i in 1:10000){ # number of trials
+  random_ordered_vector <- sample(sf_df$fc_diff1)
+  coef_list[i] <- cor.test(y = sf_df$rsq, x = random_ordered_vector, method = "spearman")$estimate
+}
+
+measured_cor_value <- cor.test(y = sf_df$rsq, x = sf_df$percept, method = "spearman")$estimate
+
+# P value from spin test
+spin_test_p_value <- length(which(coef_list > measured_cor_value))/length(coef_list)
+# p value of 0 here suggests less than 1/number of runs
+
+coef_list_df <- data.frame("coef" = coef_list)
+
+percept_spin <-
+  ggplot(coef_list_df, aes(x=coef)) + 
+  geom_histogram(color="black", 
+                 fill="#F8766D",
+                 bins = 50,
+                 alpha = 0.7) +
+  geom_vline(aes(xintercept = measured_cor_value),
+             color = "#00BFC4", linetype = "dashed", size = 1.5) +
+  theme_classic() +
+  xlab("Spearman r") +
+  ylab("Count (10,000 runs)") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  ggtitle(paste0("Perceptual function: Spearman r = ", round(measured_cor_value, 2), ", p < 1e-4"))
+
+
+ggsave("../figures/subplots/supp_percept_spin.png", 
+       plot = percept_spin,
+       width = 3000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Supplementary 6F
+
+```{r}
+# Spin tests for macroscale functional gradients
+# Cognitive function
+
+# null model spin test
+coef_list <- rep(NA, 10000)
+for (i in 1:10000){ # number of trials
+  random_ordered_vector <- sample(sf_df$fc_diff1)
+  coef_list[i] <- cor.test(y = sf_df$rsq, x = random_ordered_vector, method = "spearman")$estimate
+}
+
+measured_cor_value <- cor.test(y = sf_df$rsq, x = sf_df$cogproc, method = "spearman")$estimate
+
+# P value from spin test
+spin_test_p_value <- length(which(coef_list < measured_cor_value))/length(coef_list)
+# p value of 0 here suggests less than 1/number of runs
+
+coef_list_df <- data.frame("coef" = coef_list)
+
+cogproc_spin <-
+  ggplot(coef_list_df, aes(x=coef)) + 
+  geom_histogram(color="black", 
+                 fill="#F8766D",
+                 bins = 50,
+                 alpha = 0.7) +
+  geom_vline(aes(xintercept = measured_cor_value),
+             color = "#00BFC4", linetype = "dashed", size = 1.5) +
+  theme_classic() +
+  xlab("Spearman r") +
+  ylab("Count (10,000 runs)") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  ggtitle(paste0("Cognitive function: Spearman r = ", round(measured_cor_value, 2), ", p < 1e-4"))
+
+
+ggsave("../figures/subplots/supp_cogproc_spin.png", 
+       plot = cogproc_spin,
+       width = 3000,
+       height = 2000,
+       units = "px")
+```
+
+
+## Supplementary 6G
+
+```{r}
+# Spin tests for macroscale functional gradients
+# Biological function
+
+# null model spin test
+coef_list <- rep(NA, 10000)
+for (i in 1:10000){ # number of trials
+  random_ordered_vector <- sample(sf_df$fc_diff1)
+  coef_list[i] <- cor.test(y = sf_df$rsq, x = random_ordered_vector, method = "spearman")$estimate
+}
+
+measured_cor_value <- cor.test(y = sf_df$rsq, x = sf_df$bio, method = "spearman")$estimate
+
+# P value from spin test
+spin_test_p_value <- length(which(coef_list > measured_cor_value))/length(coef_list)
+# p value of 0 here suggests less than 1/number of runs
+
+coef_list_df <- data.frame("coef" = coef_list)
+
+bio_spin <-
+  ggplot(coef_list_df, aes(x=coef)) + 
+  geom_histogram(color="black", 
+                 fill="#F8766D",
+                 bins = 50,
+                 alpha = 0.7) +
+  geom_vline(aes(xintercept = measured_cor_value),
+             color = "#00BFC4", linetype = "dashed", size = 1.5) +
+  theme_classic() +
+  xlab("Spearman r") +
+  ylab("Count (10,000 runs)") +
+  theme(axis.text = element_text(size = 15),
+        axis.title = element_text(size = 20),
+        plot.title = element_text(size = 20, hjust = 0.5)) +
+  ggtitle(paste0("Biological function: Spearman r = ", round(measured_cor_value, 2), ", p < 1e-4"))
+
+
+ggsave("../figures/subplots/supp_bio_spin.png", 
+       plot = bio_spin,
+       width = 3000,
+       height = 2000,
+       units = "px")
+```
+
+
+# Supplementary calculations featured in paper
+
+```{r}
+cor.test(y = fc_sc_df_data$`FC (Parcelsynth)`, x = fc_sc_df_data$`FC (rsfMRI)`, method = "pearson", exact = FALSE)
+cor.test(y = fc_sc_df_data$`FC (Parcelsynth)`, x = fc_sc_df_data$`FC (rsfMRI)`, method = "pearson", exact = FALSE)
+cor.test(y = fc_sc_df_data$`FC (Parcelsynth)`, x = fc_sc_df_data$`SC (# WM Paths)`, method = "pearson", exact = FALSE)
+cor.test(y = fc_sc_df_data$`FC (Parcelsynth)`, x = fc_sc_df_data$`SC (WM Length)`, method = "pearson", exact = FALSE)
+cor.test(y = fc_sc_df_data$`FC (Parcelsynth)`, x = fc_sc_df_data$`SC (Eucl. Dist.)`, method = "pearson", exact = FALSE)
+summary(lm(`FC (Parcelsynth)` ~ `SC (# WM Paths)` + `SC (WM Length)` + `SC (Eucl. Dist.)`, data = fc_sc_df_data))
+
+table(fc_sc_df$SC_WM_paths == 0)
+
+mean(fc_sc_df$SC_Eucl_dist[fc_sc_df$SC_WM_paths != 0])
+mean(fc_sc_df$SC_Eucl_dist)
+
+summary(lm(FC_Neurosynth ~ FC_rsfMRI, data = fc_sc_df))
+summary(lm(FC_Neurosynth ~ SC_WM_paths, data = fc_sc_df))
+summary(lm(FC_Neurosynth ~ SC_WM_length, data = fc_sc_df))
+summary(lm(FC_Neurosynth ~ SC_Eucl_dist, data = fc_sc_df))
+summary(lm(FC_Neurosynth ~ SC_Eucl_dist + SC_WM_length + SC_WM_paths, data = fc_sc_df))
+
+adjustedRandIndex(fc_spec_clust_results_df$spectral_cluster, sc_spec_clust_results_df$spectral_cluster)
+
+sf_by_term_df[order(sf_by_term_df$wilcox_adj_p_value), ]
+sf_by_term_df_sig_test <- sf_by_term_df[sf_by_term_df$wilcox_adj_p_value < alpha_crit, ]
+
+sf_by_term_df_sig_test[order(sf_by_term_df_sig_test$log_fold_change, decreasing = T), ]
+sf_by_term_df_sig_test[order(sf_by_term_df_sig_test$wilcox_adj_p_value), ]
+
+sf_by_term_df[order(sf_by_term_df$wilcox_adj_p_value, decreasing = T), ]
+sf_by_term_df[order(sf_by_term_df$log_fold_change), ]
+
+#cor.test(y = sf_df$mean_x, x = sf_df$cort_thick, method = "spearman") # sagittal
+cor.test(y = sf_df$mean_y, x = sf_df$cort_thick, method = "spearman") # coronal
+sprintf("%.2e", cor.test(x = sf_df$cort_thick, y = sf_df$mean_y, method = "spearman", exact = FALSE)$p.value)
+cor.test(y = sf_df$mean_z, x = sf_df$cort_thick, method = "spearman") # axial
+sprintf("%.2e", cor.test(x = sf_df$cort_thick, y = sf_df$mean_z, method = "spearman", exact = FALSE)$p.value)
+
+cor.test(y = sf_df$rsq_rsfmri, x = sf_df$cort_thick, method = "spearman")
+sprintf("%.2e", cor.test(x = sf_df$cort_thick, y = sf_df$rsq_rsfmri, method = "spearman", exact = FALSE)$p.value)
+cor.test(y = sf_df$rsq, x = sf_df$cort_thick, method = "spearman")
+
+cor.test(y = scale(cogproc_percent_w_by_parcel), x = sf_df$cort_thick, method = "spearman")
+sprintf("%.2e", cor.test(x = sf_df$cort_thick, y = sf_df$cogproc, method = "spearman", exact = FALSE)$p.value)
+
+cor.test(y = scale(cogproc_percent_w_by_parcel), x = sf_df$cort_thick, method = "spearman")
+cor.test(y = scale(bio_percent_w_by_parcel), x = sf_df$cort_thick, method = "spearman")
+
+neurosynth_functional_activation_df
+
+mean(rowSums(neurosynth_functional_activation_df != 0))
+
+table(sf_by_term_grouped_df$label_color)
+
+table(is.na(sf_by_term_grouped_df$concreteness))
+
+cor.test(y = sf_df$sc_degree, x = sf_df$cort_thick, method = "spearman")
+
+rsfmri_control_demographics_df <- read.csv("../data/misc/rsfmri_control_demographics.csv")
+table(rsfmri_control_demographics_df$sex)
+mean(rsfmri_control_demographics_df$age.at.time.of.study)
+min(rsfmri_control_demographics_df$age.at.time.of.study)
+max(rsfmri_control_demographics_df$age.at.time.of.study)
+```

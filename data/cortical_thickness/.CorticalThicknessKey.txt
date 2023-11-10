@@ -1,0 +1,5 @@
+Format of CSV files:
+Row 1: Average thickness in parcel (mm)
+Row 2: Standard deviation of thickness values in parcel
+Row 3: Total thickness voxels in parcel
+Row 4: Total voxels in parcel
