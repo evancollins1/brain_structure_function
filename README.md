@@ -142,11 +142,11 @@ Using `MATLAB` code from Esfahlani et al. (2022), the optimized structural conne
 
 # Demo and Instructions
 
-This repository contains all the data, data processing code, and analysis code to replicate all findings and figures shown in the paper. There is one exception, due to licensing reasons, the [LIWC2015](https://www.liwc.app/) dataset is not available on this repository; the user will need to download and place it into the `data/nlp` folder as `LIWC2015_Dictionary.dic`.
+This repository contains all the data, data processing code, and analysis code to replicate all findings and figures shown in the paper. There is one exception, due to licensing reasons, the [LIWC2015](https://www.liwc.app/) dataset is not available on this repository; the user will need to download and place it into the `/data/nlp` folder as `LIWC2015_Dictionary.dic`.
 
 This repository also contains the processed data resulting from the data processing code and figures generated from the analysis code; thus, it is not necessary to run each script in the order we initially executed them.
 
-Nevertheless, the following list details the precise order (and purpose) of executing the scripts in the `\scripts` folder to generate all figures included in the paper. Note that each subsequent script as shown in the list below often relies on the processed data generated from the prior scripts. Again, all processed data is already included in the repository.
+Nevertheless, the following list details the precise order (and purpose) of executing the scripts in the `/scripts` folder to generate all figures included in the paper. Note that each subsequent script as shown in the list below often relies on the processed data generated from the prior scripts. Again, all processed data is already included in the repository.
 
 1. `process_neurosynth_data.Rmd` was run to process fMRI data from Neurosynth and transform it into Yale Brain Atlas space.
 
