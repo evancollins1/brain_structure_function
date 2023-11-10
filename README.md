@@ -55,7 +55,7 @@ To run the analysis code in this repository, it is recommended to have a compute
 
 ## Software requirements
 
-This code has been implemented with `R` version 4.3.1. Other `R` versions will likely work. See below for specific `R` packages required. To run `.Rmd` files, the RStudio is recommended.
+This code has been implemented with `R` version 4.3.1. Other `R` versions will likely work. See below for specific `R` packages required. To run `.Rmd` files, RStudio is recommended.
 
 A small subset of analysis, namely, spectral clustering, diffusion mapping, and creation of a structure-function network plot was conducted using `Python` version 3.10.12. See below for creating an appropriate conda environment. To run `.ipynb` files, Visual Studio Code is recommended.
 
