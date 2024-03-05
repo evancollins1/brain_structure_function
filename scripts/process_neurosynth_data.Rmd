@@ -2,14 +2,13 @@
 title: "Process Neurosynth Data into Yale Brain Atlas space"
 author: "Evan Collins"
 output: html_document
-date: '2023-02-06'
+date: '2024-02-06'
 ---
 
 All processing code in this document has written by Evan Collins. Any questions can be sent to evantomcollins@gmail.com.
 
 Neurosynth citation:
 Yarkoni T, Poldrack RA, Nichols TE, Van Essen DC, Wager TD. Large-scale automated synthesis of human functional neuroimaging data. Nat Methods. 2011 Jun 26;8(8):665-70. doi: 10.1038/nmeth.1635. PMID: 21706013; PMCID: PMC3146590.
-
 
 ```{r}
 # Load packages
@@ -18,24 +17,19 @@ library(reactable)
 library(reactablefmtr)
 library(plotly)
 library(readobj)
-library(svMisc)
 library(httr)
 library(easyPubMed)
+library(svMisc)
 ```
 
 ```{r}
 # Load files
-
 # Neurosynth paper database downloaded from ....
 # https://github.com/neurosynth/neurosynth-data/blob/e8f27c4a9a44dbfbc0750366166ad2ba34ac72d6/current_data.tar.gz
-database <- read.csv("/Users/Evan/Desktop/Epilepsy_research/neurosynth-master/data/current_data/database.csv")
-neurosynth_paper_database <- read.csv("../data/neurosynth/neurosynth_paper_database.csv")
+database <- read.csv("../data/metaanalysis/neurosynth/neurosynth_paper_database_raw.csv")
 
 # Yale Brain Atlas positions (whole brain)
 atlas_whole_positions <- read.csv("../data/atlas/atlas_whole_positions.csv")
-
-# Yale Brain Atlas indices (whole brain)
-atlas_whole_indices <- read.csv("../data/atlas/atlas_whole_indices.csv")
 ```
 
 ```{r}
@@ -50,20 +44,20 @@ known_points <- atlas_whole_positions
 closest_indices <- numeric(length(input_x))
 min_distance_vec <- c()
 
-  for (i in 1:length(input_x)) {
-    progress(i, length(input_x))
-    min_distance <- Inf
-    closest_point_index <- -1
-    for (j in seq_along(known_points$x)) {
-      distance <- sqrt((known_points$x[j] - input_x[i])^2 + (known_points$y[j] - input_y[i])^2 + (known_points$z[j] - input_z[i])^2)
-      if (distance < min_distance) {
-        min_distance <- distance
-        closest_point_index <- j
-      }
+for (i in 1:length(input_x)){
+  svMisc::progress(i, length(input_x))
+  min_distance <- Inf
+  closest_point_index <- -1
+  for (j in seq_along(known_points$x)) {
+    distance <- sqrt((known_points$x[j] - input_x[i])^2 + (known_points$y[j] - input_y[i])^2 + (known_points$z[j] - input_z[i])^2)
+    if (distance < min_distance) {
+      min_distance <- distance
+      closest_point_index <- j
     }
-    closest_indices[i] <- closest_point_index
-    min_distance_vec[i] <- min_distance
   }
+  closest_indices[i] <- closest_point_index
+  min_distance_vec[i] <- min_distance
+}
 
 closest_indices_df <- data.frame("index" = c(1:length(closest_indices)),
                                  "min_distance" = min_distance_vec,
@@ -73,29 +67,28 @@ parcel_labels <- atlas_whole_positions$parcel[closest_indices_df$closest_index]
 database$parcel <- parcel_labels
 database$distance <- closest_indices_df$min_distance
 
-# Remove all activations greater than 10mm away from nearest vertex
+# Remove all activations greater than 10mm away from nearest vertex in Yale Brain Atlas space
 database_clean <- database[database$distance <= 10, ]
 database_clean <- database_clean[-which(colnames(database_clean) == "X")]
 write.csv(database_clean, "../data/neurosynth/neurosynth_paper_database.csv", row.names = F)
 ```
-
 
 ```{r}
 # This chunk webscrapes Neurosynth to find the average z-score across
 # all vertices in each Yale Brain Atlas parcel
 
 # Round vertex coordinates
-atlas_positions_rounded <- atlas_positions
-atlas_positions_rounded$x <- round(atlas_positions_rounded$x, 0)
-atlas_positions_rounded$y <- round(atlas_positions_rounded$y, 0)
-atlas_positions_rounded$z <- round(atlas_positions_rounded$z, 0)
+atlas_whole_positions_rounded <- atlas_whole_positions
+atlas_whole_positions_rounded$x <- round(atlas_whole_positions_rounded$x, 0)
+atlas_whole_positions_rounded$y <- round(atlas_whole_positions_rounded$y, 0)
+atlas_whole_positions_rounded$z <- round(atlas_whole_positions_rounded$z, 0)
 
 avg_z_score_by_parcel_list <- list()
 
 # For each parcel
-for (i in 1:690){
-  parcel_of_int <- unique(atlas_positions_rounded$parcel)[i]
-  coord_of_int_df <- atlas_positions_rounded[atlas_positions_rounded$parcel == parcel_of_int, ]
+for (i in 1:696){
+  parcel_of_int <- unique(atlas_whole_positions_rounded$parcel)[i]
+  coord_of_int_df <- atlas_whole_positions_rounded[atlas_whole_positions_rounded$parcel == parcel_of_int, ]
   z_score_by_coord_list <- list()
   # For each vertex for this parcel
   for (j in 1:nrow(coord_of_int_df)){
@@ -119,29 +112,29 @@ for (i in 1:(upper_index-lower_index+1)){
   avg_z_score_df[i, ] <- avg_z_score_by_parcel_list[[i+lower_index-1]]
 }
 
-# 690 parcels x 1334 terms
+# 696 parcels x 1334 terms
 write.csv(avg_z_score_df, "../data/neurosynth/neurosynth_all_activation_database.csv", row.names = F)
 ```
 
 ```{r}
 # Select only the subset terms deemed to be functional after expert review
-neurosynth_all_activation_df <- read.csv("../data/neurosynth/neurosynth_all_activation_database.csv")
-neurosynth_terms_functional_review_df <- read.csv("../data/neurosynth/neurosynth_terms_functional_review.csv")
+neurosynth_all_activation_df <- read.csv("../data/metaanalysis/neurosynth/neurosynth_all_activation_database.csv")
+metaanalysis_functional_terms_df <- read.csv("../data/metaanalysis/metaanalysis_functional_terms.csv")
 
 # Average activation data for functional terms that we combined into a new shared functional term 
-neurosynth_functional_activation_df <- neurosynth_all_activation_df[,which(names(neurosynth_all_activation_df) %in% neurosynth_terms_functional_review_df$original_functional_term)]
+neurosynth_functional_activation_df <- neurosynth_all_activation_df[,which(names(neurosynth_all_activation_df) %in% metaanalysis_functional_terms_df$original_neurosynth_functional_term)]
 # Initialize clean dataframe
-neurosynth_functional_activation_clean_df <- as.data.frame(matrix(NA, 690, length(unique(neurosynth_terms_functional_review_df$new_functional_term))))
-names(neurosynth_functional_activation_clean_df) <- unique(neurosynth_terms_functional_review_df$new_functional_term)
+neurosynth_functional_activation_clean_df <- as.data.frame(matrix(NA, 696, length(unique(metaanalysis_functional_terms_df$new_neurosynth_functional_term))))
+names(neurosynth_functional_activation_clean_df) <- unique(metaanalysis_functional_terms_df$new_neurosynth_functional_term)
 
 for (i in 1:ncol(neurosynth_functional_activation_clean_df)){
-  new_functional_term_i <- names(neurosynth_functional_activation_clean_df)[i]
-  original_functional_terms_i <- neurosynth_terms_functional_review_df$original_functional_term[neurosynth_terms_functional_review_df$new_functional_term == new_functional_term_i]
-  original_functional_terms_i_activation <- neurosynth_functional_activation_df[,which(names(neurosynth_functional_activation_df) %in% original_functional_terms_i)]
-  if (length(original_functional_terms_i) == 1){
-    neurosynth_functional_activation_clean_df[,i] <- original_functional_terms_i_activation
+  new_neurosynth_functional_term_i <- names(neurosynth_functional_activation_clean_df)[i]
+  original_neurosynth_functional_terms_i <- metaanalysis_functional_terms_df$original_neurosynth_functional_term[metaanalysis_functional_terms_df$new_neurosynth_functional_term == new_neurosynth_functional_term_i]
+  original_neurosynth_functional_terms_i_activation <- neurosynth_functional_activation_df[,which(names(neurosynth_functional_activation_df) %in% original_neurosynth_functional_terms_i)]
+  if (length(original_neurosynth_functional_terms_i) == 1){
+    neurosynth_functional_activation_clean_df[,i] <- original_neurosynth_functional_terms_i_activation
   } else {
-    neurosynth_functional_activation_clean_df[,i] <- rowMeans(original_functional_terms_i_activation)
+    neurosynth_functional_activation_clean_df[,i] <- rowMeans(original_neurosynth_functional_terms_i_activation)
   }
 }
 
@@ -152,8 +145,8 @@ neurosynth_functional_activation_clean_df[12,] <- neurosynth_functional_activati
 # Convert all negative activations to zero
 neurosynth_functional_activation_clean_df[neurosynth_functional_activation_clean_df < 0] <- 0
 
-# Result is average z scores for 334 functional terms across 690 parcel
-write.csv(neurosynth_functional_activation_clean_df, "../data/neurosynth/neurosynth_functional_activation_database.csv", row.names = F)
+# Result is average z scores for 334 functional terms across 696 parcels
+write.csv(neurosynth_functional_activation_clean_df, "../data/metaanalysis/neurosynth/neurosynth_functional_activation_database.csv", row.names = F)
 ```
 
 ```{r}
@@ -162,13 +155,11 @@ write.csv(neurosynth_functional_activation_clean_df, "../data/neurosynth/neurosy
 # to compute word embeddings of  functional terms based on the corpus of abstracts
 
 pmid_list <- unique(neurosynth_paper_database$id)
-length(pmid_list)
-
 neurosynth_abstracts <- c()
 
 for (i in 1:length(pmid_list)){
-  Sys.sleep(0.15)
-  progress(i, length(first_i:last_i))
+  #Sys.sleep(0.05)
+  svMisc::progress(i, length(pmid_list))
   pubmed_query <- pmid_list[i]
   pubmed_query_step2 <- get_pubmed_ids(pubmed_query)
   pubmed_query_step3 <- fetch_pubmed_data(pubmed_query_step2)
@@ -179,7 +170,7 @@ for (i in 1:length(pmid_list)){
 neurosynth_abstracts_clean <- neurosynth_abstracts[first_i:length(neurosynth_abstracts)]
 
 # Remove PubMed papers without scrapable abstracts on PubMed
-# reduces from 14,200 unique abstracts to 12,909
+# reduces from 14,228 unique abstracts to 12,937
 neurosynth_abstracts_clean <- neurosynth_abstracts[!substr(neurosynth_abstracts, 1, 1) == "<"]
 
 write.csv(neurosynth_abstracts_clean, "../data/neurosynth/neurosynth_abstracts.csv", row.names = F)

@@ -11,9 +11,9 @@ library(ggpubr)
 
 # Load files
 # Yale Brain Atlas parcel dictionary
-parcel_dict <- read.csv("../data/misc/parcel_dict.csv")
+parcel_dict <- read.csv("../data/atlas/parcel_dict.csv")
 parcel_names <- parcel_dict$Name
-vertex_number_by_parcel <- parcel_dict$Num_vertex
+vertex_number_by_parcel <- parcel_dict$num_vertex
 # Yale Brain Atlas whole brain positions and indices
 atlas_whole_positions <- read.csv("../data/atlas/atlas_whole_positions.csv")
 atlas_whole_indices <- read.csv("../data/atlas/atlas_whole_indices.csv")
@@ -24,8 +24,8 @@ atlas_LH_indices <- read.csv("../data/atlas/atlas_LH_indices.csv")
 atlas_RH_positions <- read.csv("../data/atlas/atlas_RH_positions.csv")
 atlas_RH_indices <- read.csv("../data/atlas/atlas_RH_indices.csv")
 # Yale Brain Atlas deep left hemisphere (amygdala, hippocampus, insula) positions and indices
-atlas_deepLH_positions <- read.csv("../data/atlas/atlas_LH_positions.csv")
-atlas_deepLH_indices <- read.csv("../data/atlas/atlas_LH_indices.csv")
+atlas_deepLH_positions <- read.csv("../data/atlas/atlas_deepLH_positions.csv")
+atlas_deepLH_indices <- read.csv("../data/atlas/atlas_deepLH_indices.csv")
 # Yale Brain Atlas deep right hemisphere (amygdala, hippocampus, insula) positions and indices
 atlas_deepRH_positions <- read.csv("../data/atlas/atlas_deepRH_positions.csv")
 atlas_deepRH_indices <- read.csv("../data/atlas/atlas_deepRH_indices.csv")
@@ -153,7 +153,7 @@ get_rgb_lmu_for_parcel_values <- function(parcel_values, lower_bound_color = c(0
   stopifnot("upper_bound_color must be a vector of length 3 (R, G, B) containing numeric or integer values on the RGB scale from 0 to 255." = is.vector(upper_bound_color) & (all(is.numeric(upper_bound_color) | is.integer(upper_bound_color))) & (length(upper_bound_color) == 3) & all(upper_bound_color >= 0 & upper_bound_color <= 255))
   stopifnot("zeroed must be either TRUE (1) or FALSE (0)." = zeroed == TRUE | zeroed == FALSE)
   stopifnot("legend must be either TRUE (1) or FALSE (0)." = legend == TRUE | legend == FALSE)
-  stopifnot("legend_title must be a single character element." = is.null(legend_title) | (is.character(legend_title) & (length(legend_title) == 1)))
+  stopifnot("legend_title must be a single character element." = is.null(legend_title) | class(legend_title) == "call" | (is.character(legend_title) & (length(legend_title) == 1)))
   stopifnot("legend_values must be either TRUE (1) or FALSE (0)." = legend_values == TRUE | legend_values == FALSE)
 
   parcel_rgb_df <- data.frame("values" = parcel_values)
@@ -215,12 +215,12 @@ get_rgb_lmu_for_parcel_values <- function(parcel_values, lower_bound_color = c(0
 # Function to generate 3D plot of Yale Brain Atlas
 plot_brain_3d <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel_dict$YBA_G_color, B_values = parcel_dict$YBA_B_color, brain_section = "whole", extra_text_varname = "Region", extra_text_values = parcel_dict$Region, hide_axes = TRUE) {
 
-  stopifnot("R_values must be a vector of length 690 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(R_values) | (is.vector(R_values) & (all(is.numeric(R_values) | is.integer(R_values))) & (length(R_values) == 690) & all(R_values >= 0 & R_values <= 255)))
-  stopifnot("G_values must be a vector of length 690 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(G_values) | (is.vector(G_values) & (all(is.numeric(G_values) | is.integer(G_values))) & (length(G_values) == 690) & all(G_values >= 0 & G_values <= 255)))
-  stopifnot("B_values must be a vector of length 690 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(B_values) | (is.vector(B_values) & (all(is.numeric(B_values) | is.integer(B_values))) & (length(B_values) == 690) & all(B_values >= 0 & B_values <= 255)))
+  stopifnot("R_values must be a vector of length 696 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(R_values) | (is.vector(R_values) & (all(is.numeric(R_values) | is.integer(R_values))) & (length(R_values) == 696) & all(R_values >= 0 & R_values <= 255)))
+  stopifnot("G_values must be a vector of length 696 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(G_values) | (is.vector(G_values) & (all(is.numeric(G_values) | is.integer(G_values))) & (length(G_values) == 696) & all(G_values >= 0 & G_values <= 255)))
+  stopifnot("B_values must be a vector of length 696 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(B_values) | (is.vector(B_values) & (all(is.numeric(B_values) | is.integer(B_values))) & (length(B_values) == 696) & all(B_values >= 0 & B_values <= 255)))
   stopifnot("brain_section must be either 'whole', 'LH', 'RH', 'deepLH', or 'deepRH' as a single character element." = (is.character(brain_section) & (brain_section %in% c('whole', 'LH', 'RH', 'deepLH', 'deepRH'))))
   stopifnot("extra_text_varname must be a single character element." = is.null(extra_text_varname) | (is.character(extra_text_varname) & (length(extra_text_varname) == 1)))
-  stopifnot("extra_text_values must be a vector of length 690." = is.null(extra_text_values) | (is.vector(extra_text_values) & (length(extra_text_values) == 690)))
+  stopifnot("extra_text_values must be a vector of length 696." = is.null(extra_text_values) | (is.vector(extra_text_values) & (length(extra_text_values) == 696)))
   stopifnot("hide_axes must be either TRUE (1) or FALSE (0)." = hide_axes == TRUE | hide_axes == FALSE)
 
   if (brain_section == "whole"){
@@ -263,7 +263,7 @@ plot_brain_3d <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel_
       bordercolor = "darkblue",
       font = list(size = 15, family = "Verdana")
     )) %>%
-    config(displaylogo = F, displayModeBar = T) %>%
+    plotly::config(displaylogo = F, displayModeBar = T) %>%
     layout(scene = list(camera = list(
       eye = list(x = 1.5, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -284,9 +284,9 @@ plot_brain_3d <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel_
 # Function to generate a single image of six views of Yale Brain Atlas
 plot_brain_map <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel_dict$YBA_G_color, B_values = parcel_dict$YBA_B_color, plot_title = NULL, legend_figure = NULL){
 
-  stopifnot("R_values must be a vector of length 690 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(R_values) | (is.vector(R_values) & (all(is.numeric(R_values) | is.integer(R_values))) & (length(R_values) == 690) & all(R_values >= 0 & R_values <= 255)))
-  stopifnot("G_values must be a vector of length 690 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(G_values) | (is.vector(G_values) & (all(is.numeric(G_values) | is.integer(G_values))) & (length(G_values) == 690) & all(G_values >= 0 & G_values <= 255)))
-  stopifnot("B_values must be a vector of length 690 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(B_values) | (is.vector(B_values) & (all(is.numeric(B_values) | is.integer(B_values))) & (length(B_values) == 690) & all(B_values >= 0 & B_values <= 255)))
+  stopifnot("R_values must be a vector of length 696 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(R_values) | (is.vector(R_values) & (all(is.numeric(R_values) | is.integer(R_values))) & (length(R_values) == 696) & all(R_values >= 0 & R_values <= 255)))
+  stopifnot("G_values must be a vector of length 696 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(G_values) | (is.vector(G_values) & (all(is.numeric(G_values) | is.integer(G_values))) & (length(G_values) == 696) & all(G_values >= 0 & G_values <= 255)))
+  stopifnot("B_values must be a vector of length 696 containing numeric or integer values on the RGB scale from 0 to 255." = is.null(B_values) | (is.vector(B_values) & (all(is.numeric(B_values) | is.integer(B_values))) & (length(B_values) == 696) & all(B_values >= 0 & B_values <= 255)))
   stopifnot("plot_title must be a single character element." = is.null(plot_title) | (is.character(plot_title) & (length(plot_title) == 1)))
   stopifnot("legend_figure must be a ggplot object." = is.null(legend_figure) | is.ggplot(legend_figure))
 
@@ -304,7 +304,7 @@ plot_brain_map <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel
     j = atlas_whole_indices$j,
     k = atlas_whole_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 0, y = 0, z = 1.4),
       up = list(x = 0, y = 1, z = 0),
@@ -327,7 +327,7 @@ plot_brain_map <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel
     j = atlas_whole_indices$j,
     k = atlas_whole_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 0, y = 0, z = -1.5),
       up = list(x = 0, y = 1, z = 0),
@@ -349,7 +349,7 @@ plot_brain_map <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel
     j = atlas_LH_indices$j,
     k = atlas_LH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = -1.3, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -371,7 +371,7 @@ plot_brain_map <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel
     j = atlas_LH_indices$j,
     k = atlas_LH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 1.5, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -392,7 +392,7 @@ plot_brain_map <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel
     j = atlas_RH_indices$j,
     k = atlas_RH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 1.3, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -413,7 +413,7 @@ plot_brain_map <- function(R_values = parcel_dict$YBA_R_color, G_values = parcel
     j = atlas_RH_indices$j,
     k = atlas_RH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = -1.5, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -485,7 +485,7 @@ get_rgb_for_neurosynth_term <- function(functional_term, lower_bound_color = c(0
   stopifnot("legend must be either TRUE (1) or FALSE (0)." = legend == TRUE | legend == FALSE)
   stopifnot("legend_title must be a single character element." = is.null(legend_title) | (is.character(legend_title) & (length(legend_title) == 1)))
 
-  # Get parcel_values based on Neurosynth values for that term across 690 YBA parcels
+  # Get parcel_values based on Neurosynth values for that term across 696 YBA parcels
   parcel_values <- parcelsynth_df[,functional_term]
 
   # Function to interpolate between two colors based on a ratio
@@ -622,7 +622,7 @@ plot_neurosynth_brain_3d_for_term <- function(functional_term, brain_section = "
       bordercolor = "darkblue",
       font = list(size = 15, family = "Verdana")
     )) %>%
-    config(displaylogo = F, displayModeBar = T) %>%
+    plotly::config(displaylogo = F, displayModeBar = T) %>%
     layout(scene = list(camera = list(
       eye = list(x = 1.5, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -667,7 +667,7 @@ plot_neurosynth_brain_map_for_term <- function(functional_term, plot_title = NUL
     j = atlas_whole_indices$j,
     k = atlas_whole_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 0, y = 0, z = 1.4),
       up = list(x = 0, y = 1, z = 0),
@@ -690,7 +690,7 @@ plot_neurosynth_brain_map_for_term <- function(functional_term, plot_title = NUL
     j = atlas_whole_indices$j,
     k = atlas_whole_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 0, y = 0, z = -1.5),
       up = list(x = 0, y = 1, z = 0),
@@ -712,7 +712,7 @@ plot_neurosynth_brain_map_for_term <- function(functional_term, plot_title = NUL
     j = atlas_LH_indices$j,
     k = atlas_LH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = -1.3, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -734,7 +734,7 @@ plot_neurosynth_brain_map_for_term <- function(functional_term, plot_title = NUL
     j = atlas_LH_indices$j,
     k = atlas_LH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 1.5, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -755,7 +755,7 @@ plot_neurosynth_brain_map_for_term <- function(functional_term, plot_title = NUL
     j = atlas_RH_indices$j,
     k = atlas_RH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = 1.3, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),
@@ -776,7 +776,7 @@ plot_neurosynth_brain_map_for_term <- function(functional_term, plot_title = NUL
     j = atlas_RH_indices$j,
     k = atlas_RH_indices$k
   ) %>%
-    config(displaylogo = F, displayModeBar = F) %>%
+    plotly::config(displaylogo = F, displayModeBar = F) %>%
     layout(scene = list(camera = list(
       eye = list(x = -1.5, y = 0, z = 0),
       up = list(x = 0, y = 0, z = 1),

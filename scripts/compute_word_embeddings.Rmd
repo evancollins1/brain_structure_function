@@ -2,7 +2,7 @@
 title: "Compute word embeddings for Neurosynth functional terms"
 author: "Evan Collins"
 output: html_document
-date: '2023-08-11'
+date: '2024-02-06'
 ---
 
 All code in this markdown document has written by Evan Collins. Any questions can be sent to evantomcollins@gmail.com.
@@ -16,21 +16,16 @@ set.seed(123456789)
 ```{r}
 # Load Neurosynth data
 # generated from process_neurosynth_data.Rmd
-neurosynth_functional_activation_df <- read.csv("../data/neurosynth/neurosynth_functional_activation_database.csv")
-neurosynth_abstracts_df <- read.csv("../data/neurosynth/neurosynth_abstracts.csv")
+neurosynth_functional_activation_df <- read.csv("../data/metaanalysis/neurosynth/neurosynth_functional_activation_database.csv")
+neurosynth_abstracts_df <- read.csv("../data/metaanalysis/neurosynth/neurosynth_abstracts.csv")
 ```
 
 ```{r}
 # Calculate word embeddings of the 334 Neurosynth functional terms
 neurosynth_abstracts_clean <- tolower(neurosynth_abstracts_df$abstract)
+# Word embedding model trained on Neurosynth data
 model <- word2vec(x = neurosynth_abstracts_clean, type = "cbow", dim = 150, iter = 20)
 embedding <- as.matrix(model)
 neurosynth_term_embedding_df <- as.data.frame(predict(model, unique(colnames(neurosynth_functional_activation_df)), type = "embedding"))
-write.csv(neurosynth_term_embedding_df, "../data/neurosynth/neurosynth_functional_term_word_embeddings.csv", row.names = F)
-```
-
-```{r}
-# Calculate pairwise Euclidean distance between word embeddings of the 334 functional terms
-neurosynth_term_embedding_pairwise_dist_df <- as.data.frame(as.matrix(dist(neurosynth_term_embedding_df, method = "euclidean", diag = TRUE, upper = TRUE)))
-write.csv(neurosynth_term_embedding_pairwise_dist_df, "../data/neurosynth/neurosynth_functional_term_word_embeddings_pairwise_distances.csv", row.names = F)
+write.csv(neurosynth_term_embedding_df, "../data/metaanalysis/neurosynth/neurosynth_functional_term_word_embeddings.csv", row.names = F)
 ```
