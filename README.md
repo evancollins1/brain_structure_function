@@ -85,7 +85,7 @@ This code has been tested on the following systems, although it should work gene
 
 - macOS: Ventura 13.2.1
 
-- Linus: Ubuntu 22.04
+- Linux: Ubuntu 22.04
 
 # Installation guide
 
