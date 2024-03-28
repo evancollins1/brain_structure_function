@@ -160,7 +160,7 @@ $ conda install jupyter
 
 ## Install MATLAB
 
-Using `MATLAB` code from Esfahlani et al. (2022), the optimized structural connectivity metric was determined by parcel. This script was implemented in `MATLAB` version 2022b. Instructions for downloading `MATLAB` can be found [here](https://www.mathworks.com/products/matlab.html).
+Using `MATLAB` code from Esfahlani et al. (2022), additional structural connectivity metrics were computed. This script was implemented in `MATLAB` version 2022b. Instructions for downloading `MATLAB` can be found [here](https://www.mathworks.com/products/matlab.html).
 
 # Demo and Instructions
 
