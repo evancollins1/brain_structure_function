@@ -8,7 +8,7 @@
 
 ## Description
 
-This repository contains all data processing code and analysis discussed in the paper "Mapping the structure-function relationship along macroscale gradients in the human brain". It is currently in revision. 
+This repository contains all data processing code and analysis discussed in the paper "Mapping the structure-function relationship along macroscale gradients in the human brain".
 
 _____
 
@@ -100,7 +100,7 @@ $ git clone https://github.com/evancollins1/brain_structure_function.git
 From the `R` terminal, install the following packages:
 
 ```
-install.packages(c("dplyr", "plotly", "ggplot2", "Rmisc", "png", "grid", "ggpubr", "reactable", "reactablefmtr", "readobj", "svMisc", "httr", "easyPubMed", "word2vec", "reticulate", "mclust", "tidyverse", "ggseg3d", "lsa", "corrplot", "ggbreak", "patchwork", "Rtsne", "ggrepel", "ggcharts", "igraph", "quanteda", "MASS", "factoextra", "ggtext", "rmatio", "leaps", "car", "igraph"))
+install.packages(c("dplyr", "plotly", "ggplot2", "Rmisc", "png", "grid", "ggpubr", "reactable", "reactablefmtr", "readobj", "svMisc", "httr", "easyPubMed", "word2vec", "reticulate", "mclust", "tidyverse", "ggseg3d", "lsa", "corrplot", "ggbreak", "patchwork", "Rtsne", "ggrepel", "ggcharts", "igraph", "quanteda", "MASS", "factoextra", "ggtext", "rmatio", "leaps", "car", "igraph", "openxlsx"))
 ```
 
 The `.Rmd` files function will all the packages in their versions as they appear on CRAN on October 1, 2023. The specific package versions are as follows:
@@ -140,6 +140,7 @@ rmatio=0.19.0
 leaps=3.1
 car=3.1.2
 igraph=1.5.0
+openxlsx=4.2.5.2
 ```
 
 Moreover, one function in `utils.R` requires the use of the `orca` package to export static images. `orca` version 1.3.1 was used for this study. Installation instructions for `orca` can be viewed [here](https://github.com/plotly/orca). If Node.js is installed, one way to download `orca` is with `npm` as follows:
