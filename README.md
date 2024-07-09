@@ -1,5 +1,7 @@
 # Mapping the structure-function relationship along macroscale gradients in the human brain
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.12697233.svg)](https://doi.org/10.5281/zenodo.12697233)
+
 <p align="center">
   <img src="data/misc/cover_wide.png" alt="alt text" width="800px" align="middle"/>
 </p>
